@@ -1,0 +1,3 @@
+# The reference backend and the protocol layer need only `cryptography`
+# (X25519, ECIES via X25519+AES-GCM, HKDF, Ed25519, SHA-256).
+cryptography>=42.0
