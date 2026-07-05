@@ -17,44 +17,28 @@ requirements **S2–S7** with executable scenarios.
 
 #TODO: Correct this
 
-**Language — Python.** The proposal allows Java, Kotlin, Python or Go and asks
-for the choice best suited to the task; it also explicitly invites bypassing the
-Kotlin wrapper and *"using the OpenABE C++ API directly, whichever is simpler."*
-The simplest, most direct way to obtain the real CP-WATERS-KEM is to drive
-**OpenABE's own command-line tools** as a subprocess — this avoids the JNI /
-Kotlin-Native native-linking burden of the wrapper entirely. Orchestrating a
-CLI and expressing the FO transform, the handshake and the four principals is
-cleanest in Python, and the code reads almost line-for-line like the report's
-algorithms. (The proposal's reference to the *Multiplatform OpenABE Wrapper* is
-honoured in spirit: that wrapper exists to expose OpenABE across platforms; here
-we reach the same primitive through OpenABE directly.)
+## 1. Language and CP-ABE backend
 
-**CP-ABE — a pluggable KEM with two interchangeable backends.** The protocol is
-written once against a small `CpAbeKem` interface (`setup / keygen / encaps /
-decaps`, matching `Π = (Setup, KeyGen, Encaps, Decaps)` from Section 3.1). Two
-backends implement it:
+**Language — Python**, driving **OpenABE** through its command-line tools. The
+proposal allows Java/Kotlin/Python/Go and explicitly invites using OpenABE
+directly instead of the Kotlin wrapper; driving the `oabe_*` CLI is the simplest
+way to reach the real **CP-WATERS-KEM**, and the FO transform, handshake and
+principals read almost line-for-line like the report's algorithms.
 
-| Backend | What it is | When it is used |
+**CP-ABE — OpenABE only.** The protocol is written once against a small
+`CpAbeKem` interface (`setup / keygen / encaps / decaps`, matching
+`Pi = (Setup, KeyGen, Encaps, Decaps)`), and the sole backend is the real thing:
+
+| Backend | What it is | When |
 |---|---|---|
-| **OpenABE** (`openabe_backend.py`) | Thin adapter over `oabe_setup/keygen/enc/dec`, scheme `-s CP` — the **real CP-WATERS-KEM** the report specifies. | Automatically, whenever the `oabe_*` tools are on the PATH. |
+| **OpenABE** (`cpabe/openabe_backend.py`) | Thin adapter over `oabe_setup/keygen/enc/dec`, scheme `-s CP` — the real CP-WATERS-KEM. | Always (the only backend). |
 
 
----
-
-## 2. Quick start (reference backend, no native deps)
-
-```bash
-pip install -r requirements.txt        # just `cryptography`
-python3 run_demo.py                     # runs all scenarios
-```
-
-Expected: ten scenarios, each ending in a `✓`, exercising S2, S3, S4, S5, S6,
-S7, F1, F2, F3. Force a backend with `--backend reference` or
-`--backend openabe`.
 
 ---
 
-## 3. Running against OpenABE (CP-WATERS-KEM)
+
+## 2. Running against OpenABE (CP-WATERS-KEM)
 
 The protocol code does not change — only the KEM backend does.
 
@@ -78,7 +62,7 @@ install`) with some adjustments to make it work for `ubuntu:20.04`.
 
 ---
 
-## 4. What the PoC implements, mapped to the report
+## 3. What the PoC implements, mapped to the report
 
 ### Principals and phases (Section 3.2)
 
@@ -92,18 +76,36 @@ install`) with some adjustments to make it work for `ubuntu:20.04`.
 
 ### Cryptographic core
 
-* **Algorithms 1 & 2** (`fo.py`) — `EncABE`/`DecABE` written verbatim on top of
-  the KEM, with `u = H(R‖AP)`, `R' = F(u)`, `c' = H(k) ⊕ R`, and the
-  **re-encryption check** on decryption. As the report puts it, that check *"is
-  exactly what gives anonymity for the prover: a Prover accepts a challenge only
-  if it could itself have produced the same ciphertext … so a malicious Verifier
-  cannot craft a dishonest ciphertext to extract information about the key."*
-* **`RequestGen` / `PolicyGen` / `DataGen`** (`policy.py`) — the deterministic
-  `S → req → (AP, data)` pipeline of the Tamarin abstraction. The dispensing
-  policy is the report's `drug:X ∧ (not_before ≤ now) ∧ (now ≤ expires_at)`.
-* **Attribute encoding** (`policy.py`) — the prescription becomes the attribute
-  set `S` embedded in the key and **never transmitted**; the pharmacy only ever
-  learns the single "policy satisfied" bit (S2).
+* **Algorithms 1 & 2** (`cpabe/fo.py`) — `EncABE`/`DecABE` on the KEM, with the
+  **re-encryption check**. OpenABE ciphertexts are randomized, so the check is
+  realised as *decapsulated-randomness equality* (equivalent by KEM
+  correctness, and it never puts the secret randomness on the wire).
+* **`RequestGen` / `PolicyGen` / `DataGen`** (`cpabe/policy.py`) — the
+  deterministic `S -> req -> (AP, data)` pipeline.
+
+### Time validity (F1) via OpenABE numerical date comparisons
+
+OpenABE policies are not limited to AND/OR trees: they support **numerical
+attributes** and integer **comparisons**, compiled into a compact bit-encoded
+LSSS. We use this directly. The credential carries the validity window as two
+date numbers (days since 2000-01-01):
+
+```
+S = { role_patient, drug_<X>, not_before = <days>, expires_at = <days> }
+```
+
+and the pharmacy's dispensing policy is the report's
+`drug:X AND (not_before <= now) AND (now <= expires_at)`, rendered natively as
+
+```
+drug_<X>  and  not_before <= <today>  and  expires_at >= <today>
+```
+
+An expired or not-yet-valid credential fails a comparison, so decryption fails
+and nothing is dispensed — F1, enforced inside the ABE layer (so the pharmacy
+still learns only the single "satisfied" bit, S2). This replaces the earlier
+month-slot encoding: the key now holds **two** date attributes instead of dozens,
+and the window check is two integer comparisons.
 
 ### Requirements exercised by `run_demo.py`
 
@@ -121,74 +123,26 @@ install`) with some adjustments to make it work for `ubuntu:20.04`.
 
 ---
 
-## 5. Architecture
+## 4. Architecture
 
 ```
-run_demo.py                 driver: 10 scenarios, each asserting an S*/F* outcome
+run_demo.py                 driver: 11 scenarios, each asserting an S*/F* outcome
 cpabe/
-  kem.py                    CpAbeKem interface + backend auto-selection
-  reference_backend.py      runnable X25519/ECIES KEM  (default)
-  openabe_backend.py        OpenABE CLI adapter  (real CP-WATERS-KEM)
+  kem.py                    CpAbeKem interface + OpenABE backend accessor
+  openabe_backend.py        OpenABE CLI adapter (real CP-WATERS-KEM)
   fo.py                     Algorithms 1 & 2 (EncABE/DecABE + re-encryption check)
-  policy.py                 attributes, RequestGen/PolicyGen/DataGen, access-policy AST
-  principals.py             MedicalAuthority / Physician / Patient / Pharmacy + S6 signatures
+  policy.py                 attributes, RequestGen/PolicyGen/DataGen, generic
+                            OpenABE policy AST (Attr / Num comparison / And / Or)
+  principals.py             Authority / Physician / Patient / Pharmacy + Ed25519 (S6)
   revocation.py             nullifier ratchet + registry (F2/F3/S7)
-  primitives.py             H (random oracle), F (PRG/one-way), XOR, GF(2^8) Shamir
+  primitives.py             H (random oracle), F (PRG/one-way), XOR, HKDF
 openabe/
-  Dockerfile                build OpenABE + run the PoC on the real backend
-  build_openabe.sh          install the oabe_* CLI tools locally
+  Dockerfile                build OpenABE + run the PoC
+  build_openabe.sh          native OpenABE build (isolated OpenSSL 1.1.1, Relic fix)
+  mock_tools/               fake oabe_* for offline smoke-testing (NOT real crypto)
 ```
 
-### The two backends and the re-encryption check
-
-The KEM here **encapsulates the randomness `R'` itself**; the KEM key is
-`k = kdf(R')`. Algorithm 2's check `Encaps(AP, R') = c` is then realised in the
-mathematically equivalent way that suits each backend:
-
-* **Reference** ciphertexts are a *deterministic* function of `R'`, so the check
-  is a literal byte-for-byte `Encaps(AP, R') == c` — the report's exact check.
-* **OpenABE** encryption is *randomized*, so the check instead compares the
-  *decapsulated* `R'` against the recomputed `F(H(R‖AP))`. This is equivalent by
-  KEM correctness and never puts the secret randomness on the wire.
-
-Both paths are exercised by the test suite (the reference path in the demo; the
-seed-equality path is covered separately).
-
----
-
-## 6. Faithfulness and honest limitations
-
-This is a **proof of concept of the protocol**, so the CP-ABE primitive is a
-building block sourced from OpenABE. Where the sandbox cannot build OpenABE, the
-reference backend stands in — with limitations we state openly, several of which
-mirror limitations the report itself records (Section 3.4):
-
-* **Reference backend is a small-universe, non-collusion-resistant KEM.**
-  Per-attribute keys are global rather than randomised per user, so two users
-  could in principle pool attribute keys. Real collusion resistance comes from
-  the pairing-based CP-WATERS-KEM — i.e. the **OpenABE backend**. For the
-  properties demonstrated here (single-holder anonymity/unlinkability, replay,
-  unforgeability against a non-holder, malicious-verifier rejection) the
-  reference backend is faithful.
-* **Time ranges are rendered as monthly `valid:<YYYY-MM>` slot attributes.**
-  ETSI TS 103 964 compiles range predicates into the LSSS structure; we produce
-  the same *effect* (expired ⇒ decryption fails, enforced inside the ABE layer)
-  with coarse slots. Finer granularity is just more slot attributes.
-* **The nullifier registry is an explicit set**, standing in for the report's
-  *final* design (a pairing-based cryptographic accumulator, ETSI clause 4.3.4).
-  The ratchet, one-wayness and the F2/F3/S7 logic are faithful; only the compact
-  accumulator representation is simplified.
-* **S1 channels are assumed** authenticated/confidential (as the report scopes
-  them, and as the Tamarin model does); S6 authenticity of `mpk` and of the
-  physician request is made concrete with Ed25519 signatures.
-* **Not post-quantum**, consistent with the pairing-based construction and the
-  report's own note.
-* Trust concentration at the Authority (A1) is inherent to the design, as the
-  report discusses; it is not "fixed" here.
-
----
-
-## 7. References
+## . References
 
 * **[1]** ETSI. *Cyber Security (CYBER); A Verifiable Credentials extension using
   Attribute-Based Encryption.* TS 103 964 V1.1.1, Feb. 2025.
