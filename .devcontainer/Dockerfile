@@ -49,8 +49,8 @@ RUN bash -lc '. ./env && \
 RUN ldconfig
 
 # --- Prepare the Application ---
-WORKDIR /app
-COPY . /app
+# WORKDIR /app
+# COPY . /app
 
 # 6. Set up runtime environment paths safely
 ENV PATH="/usr/local/bin:${PATH}"
