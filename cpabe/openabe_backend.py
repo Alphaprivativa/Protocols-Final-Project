@@ -45,7 +45,6 @@ from __future__ import annotations
 import atexit
 import glob
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -100,23 +99,8 @@ class OACiphertext:
 # --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
-def _san(attr: str) -> str:
-    """Sanitise an attribute string to an OpenABE-safe token."""
-    return re.sub(r"[^A-Za-z0-9_]", "_", attr)
-
-
-def _policy_string(node: pol.Policy) -> str:
-    """Render a policy AST as an OpenABE boolean expression."""
-    if isinstance(node, pol.Leaf):
-        return _san(node.attr)
-    if isinstance(node, pol.And):
-        return "(" + " and ".join(_policy_string(c) for c in node.children) + ")"
-    if isinstance(node, pol.Or):
-        return "(" + " or ".join(_policy_string(c) for c in node.children) + ")"
-    raise NotImplementedError(
-        "the OpenABE CLI backend renders and/or policies; threshold gates "
-        "are only supported by the reference backend in this PoC"
-    )
+# (Policy rendering and attribute sanitisation now live in cpabe.policy, which
+#  produces OpenABE-native policy strings and attribute tokens directly.)
 
 
 # --------------------------------------------------------------------------- #
@@ -186,8 +170,12 @@ class OpenABEKEM(CpAbeKem):
     # -- KeyGen -------------------------------------------------------------- #
     def keygen(self, msk: OAMasterSecret, mpk: OAMasterPublic,
                attributes: FrozenSet[str]):
+        # Attributes are already in OpenABE's native form: categorical tokens
+        # (e.g. "drug_antiretroviral") and numerical assignments (e.g.
+        # "expires_at = 9663").  Pass them straight through -- sanitising here
+        # would corrupt the "name = value" numerical attributes.
+        attrs = sorted(attributes)
         self._ensure_master(msk.mpk, msk.msk)
-        attrs = sorted(_san(a) for a in attributes if not a.startswith("presc:"))
         tag = "key_" + uuid.uuid4().hex[:8]
         self._run_checked(["oabe_keygen", "-s", _SCHEME,
                            "-i", "|".join(attrs), "-o", tag])
@@ -204,7 +192,7 @@ class OpenABEKEM(CpAbeKem):
         pin, cout = f"pt_{tag}.bin", f"ct_{tag}.cpabe"
         self._write(pin, coins)
         self._run_checked(["oabe_enc", "-s", _SCHEME,
-                           "-e", _policy_string(policy),
+                           "-e", policy.render(),
                            "-i", pin, "-o", cout])
         return OACiphertext(blob=self._read(cout))
 

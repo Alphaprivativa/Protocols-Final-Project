@@ -63,13 +63,13 @@ def ratchet(opening: bytes) -> bytes:
 # --------------------------------------------------------------------------- #
 # Registry (stands in for the pairing accumulator of the final design)         #
 # --------------------------------------------------------------------------- #
+#TODO: Optimize nullifier implementation
 class NullifierRegistry:
     """A public registry of valid prescription handles ``NN_i``.
 
     Present in the registry  ==  "this single use is still available".
     """
-    
-    #TODO: Optimize nullifier implementation
+
     def __init__(self) -> None:
         self._valid: Set[bytes] = set()
 

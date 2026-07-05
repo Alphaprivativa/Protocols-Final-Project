@@ -58,12 +58,9 @@ def _credential_fingerprint(attrs: FrozenSet[str], patient_id: bytes) -> bytes:
 
 
 def _mpk_fingerprint(mpk: object) -> bytes:
-    if hasattr(mpk, "mpk"):                 # OpenABE master public
+    # OpenABE master public carries its bytes in `.mpk`.
+    if hasattr(mpk, "mpk"):
         return H(b"mpk", mpk.mpk)
-    if hasattr(mpk, "attr_pk"):             # reference master public
-        blob = b"".join(a.encode() + b":" + mpk.attr_pk[a]
-                        for a in sorted(mpk.attr_pk))
-        return H(b"mpk", blob)
     return H(b"mpk", repr(mpk).encode())
 
 
@@ -72,7 +69,7 @@ def _mpk_fingerprint(mpk: object) -> bytes:
 # --------------------------------------------------------------------------- #
 @dataclass
 class PublicParams:
-    mpk: object
+    mpk: object                             # for OpenABE backend this will be bytes type
     authority_pub: Ed25519PublicKey
     signature: bytes                        # over _mpk_fingerprint(mpk)  (S6)
 
@@ -147,9 +144,9 @@ class MedicalAuthority:
         # Raises cryptography.exceptions.InvalidSignature on tampering.
         pub.verify(req.signature, _request_payload(req.patient_id, req.presc))
 
-        S = req.presc.attributes()
+        S = req.presc.key_attributes()
         sk = self.kem.keygen(self.msk, self.mpk, S)
-        opening0 = rand_bytes(BLOCK)  # Seed for nullifier
+        opening0 = rand_bytes(BLOCK)
 
         #TODO: Optimize nullifier implementation
         if uses is not None:
@@ -248,9 +245,11 @@ class Patient:
 
     # Redemption under !A5 -- reveal the current nullifier, then ratchet (F2/S7).
     def current_nullifier(self) -> bytes:
+        if self._opening is None: return b"\0"
         return nullifier(self._opening, self.patient_id)
 
     def advance_use(self) -> None:
+        if self._opening is None: return None
         self._opening = ratchet(self._opening)
 
 
@@ -267,8 +266,8 @@ class Pharmacy:
         pp.authority_pub.verify(pp.signature, _mpk_fingerprint(pp.mpk))
         self.pp = pp
 
-    # Phase 3 -- verifier side: compile the dispensing policy and challenge.
     # TODO: Consider adding a check for date being really NOW
+    # Phase 3 -- verifier side: compile the dispensing policy and challenge.
     def make_challenge(self, req: Request):
         ap = PolicyGen(req)                    # the dispensing rule
         data = DataGen(req)                    # the medicine to hand over
