@@ -4,8 +4,8 @@
     "dockerfile": "Dockerfile",
     "context": ".."
   },
-  "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind",
-  "workspaceFolder": "/app",
+  // "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind",
+  // "workspaceFolder": "/app",
   "customizations": {
     "vscode": {
       "extensions": [
