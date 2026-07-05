@@ -2,9 +2,7 @@
 
 A runnable proof of concept for the protocol described in the project report
 *"Verifiable Credentials via CP-ABE Challenge-Response: Anonymous Electronic
-Prescriptions"* and required by activity **4** of the proposal
-(*"Proof-of-concept implementation in a Language among … Java, Kotlin, Python,
-Go"*).
+Prescriptions"*.
 
 It implements the four-principal, four-phase protocol of Section 3 end to end —
 including the Fujisaki–Okamoto–transformed `EncABE`/`DecABE` of **Algorithms 1
@@ -16,6 +14,8 @@ requirements **S2–S7** with executable scenarios.
 ---
 
 ## 1. Language and CP-ABE backend: what was chosen and why
+
+#TODO: Correct this
 
 **Language — Python.** The proposal allows Java, Kotlin, Python or Go and asks
 for the choice best suited to the task; it also explicitly invites bypassing the
@@ -37,10 +37,7 @@ backends implement it:
 | Backend | What it is | When it is used |
 |---|---|---|
 | **OpenABE** (`openabe_backend.py`) | Thin adapter over `oabe_setup/keygen/enc/dec`, scheme `-s CP` — the **real CP-WATERS-KEM** the report specifies. | Automatically, whenever the `oabe_*` tools are on the PATH. |
-| **Reference** (`reference_backend.py`) | A self-contained, deterministic small-universe attribute KEM built from real X25519 / ECIES / AES-GCM with LSSS-style secret sharing. | Fallback, so the PoC runs anywhere `cryptography` is installed. |
 
-This keeps the PoC **runnable out of the box** (reference backend) while giving a
-one-flag path to the **real primitive** (OpenABE) — see §3.
 
 ---
 
@@ -57,7 +54,7 @@ S7, F1, F2, F3. Force a backend with `--backend reference` or
 
 ---
 
-## 3. Running against the **real** OpenABE (CP-WATERS-KEM)
+## 3. Running against OpenABE (CP-WATERS-KEM)
 
 The protocol code does not change — only the KEM backend does.
 
@@ -68,17 +65,16 @@ docker build -f openabe/Dockerfile -t eprescription-poc .
 docker run --rm eprescription-poc          # runs the demo on the openabe backend
 ```
 
-**Option B — build OpenABE locally:**
+**Option B — Codespaces:**
+
+Create a codespace on top of this repository, this will automatically build the docker container, then run
 
 ```bash
-./openabe/build_openabe.sh                 # clone + build + install oabe_* tools
-python3 run_demo.py --backend openabe
+python3 run_demo.py --backend openabe      # runs the demo on the openabe backend
 ```
 
 Both follow OpenABE's documented build (`. ./env && make deps && make && make
-install`). The dependency build takes a few minutes. Exact CLI flag spellings
-vary slightly across OpenABE releases; if yours differs, the only file to adjust
-is `cpabe/openabe_backend.py`.
+install`) with some adjustments to make it work for `ubuntu:20.04`.
 
 ---
 
