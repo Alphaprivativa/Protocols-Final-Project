@@ -169,6 +169,7 @@ def RequestGen(attributes: FrozenSet[str], now: date) -> Request:
                    today=date_to_int(now), now=now)
 
 
+# NOTE: This policyGen function is an example but it could be more complex asking for the number of milligrams of a given medicine or the age of the patient,for simplicity we considered only one drug, no dosage, a validity time for the prescription
 def PolicyGen(req: Request) -> Policy:
     """``AP = PolicyGen(req)`` -- the dispensing rule::
 

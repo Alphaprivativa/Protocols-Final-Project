@@ -62,14 +62,14 @@ def bootstrap(kem, drug="antiretroviral",
     pp = authority.setup()
     ok("Phase 0: authority ran Setup(); mpk published and signed (S6)")
 
-    physician = Physician(cert_id="cert:dr-rossi")
+    physician = Physician(cert_id="cert:dr-esposito")
     authority.register_physician(physician.cert_id, physician.pub)
 
-    pharmacy = Pharmacy(kem, pharmacy_id=b"pharmacy:milano-01")
+    pharmacy = Pharmacy(kem, pharmacy_id=b"pharmacy:via-Brombeis-17")
     pharmacy.receive_params(pp)
     ok("pharmacy fetched mpk and verified its authenticity (S6)")
 
-    patient = Patient(kem, patient_id=b"patient:IT-SSN-8837-XYZ")
+    patient = Patient(kem, patient_id=b"patient:MRDDRM60R30Z600D")
     patient.receive_params(pp)
 
     presc = Prescription("RX-2026-000123", drug, not_before, expires_at)
@@ -99,7 +99,7 @@ def run_handshake(pharmacy: Pharmacy, patient: Patient, now: date|None = None):
 def scenario_happy(kem):
     hr("Scenario 1 - Happy path: valid credential, in-date  (S2, S4, F1)")
     _, _, pharmacy, patient = bootstrap(kem)
-    medicine, challenge, _, _ = run_handshake(pharmacy, patient)
+    medicine, challenge, _, _ = run_handshake(pharmacy, patient)  # date is automatically today
     step(f"pharmacy encrypted under AP = {challenge.ap.render()}")
     step("the two comparisons check not_before <= today <= expires_at natively")
     assert medicine is not None
@@ -144,7 +144,7 @@ def scenario_forgery(kem):
     hr("Scenario 5 - Unforgeability against a non-holder  (S4)")
     authority, physician, pharmacy, victim = bootstrap(kem)
     now = date(2026, 6, 15)
-    attacker = Patient(kem, patient_id=b"patient:attacker-99")
+    attacker = Patient(kem, patient_id=b"patient:CVNDSN87B14Z613C")
     attacker.receive_params(victim.pp)
     bad = Prescription("RX-ATK", "insulin", date(2026, 1, 1), date(2026, 12, 31))
     attacker.store_credential(
@@ -201,8 +201,8 @@ def scenario_double_spend(kem):
     authority = MedicalAuthority(kem); pp = authority.setup()
     physician = Physician(cert_id="cert:dr-bianchi")
     authority.register_physician(physician.cert_id, physician.pub)
-    pharmacy = Pharmacy(kem, pharmacy_id=b"pharmacy:roma-02"); pharmacy.receive_params(pp)
-    patient = Patient(kem, patient_id=b"patient:IT-SSN-4410-ABC"); patient.receive_params(pp)
+    pharmacy = Pharmacy(kem, pharmacy_id=b"pharmacy:Via-Brombeis-17"); pharmacy.receive_params(pp)
+    patient = Patient(kem, patient_id=b"patient:RVILGU44S07B354C"); patient.receive_params(pp)
     presc = Prescription("RX-ONE-777", "salbutamol", date(2026, 1, 1), date(2026, 12, 31))
     patient.store_credential(
         authority.issue(physician.authorize(patient.patient_id, presc), uses=1),
@@ -229,7 +229,7 @@ def scenario_active_revocation(kem):
     physician = Physician(cert_id="cert:dr-verdi")
     authority.register_physician(physician.cert_id, physician.pub)
     pharmacy = Pharmacy(kem, pharmacy_id=b"pharmacy:napoli-03"); pharmacy.receive_params(pp)
-    patient = Patient(kem, patient_id=b"patient:colluding-01"); patient.receive_params(pp)
+    patient = Patient(kem, patient_id=b"patient:BFFGLG78A28B832F"); patient.receive_params(pp)
     presc = Prescription("RX-BAD-001", "statin", date(2026, 1, 1), date(2026, 12, 31))
     patient.store_credential(
         authority.issue(physician.authorize(patient.patient_id, presc), uses=3),
@@ -253,7 +253,7 @@ def scenario_authenticity(kem):
     authority = MedicalAuthority(kem); authority.setup()
     physician = Physician(cert_id="cert:dr-neri")
     authority.register_physician(physician.cert_id, physician.pub)
-    pid = b"patient:auth-check"
+    pid = b"patient:PVLLRD88S26E625K"
     presc = Prescription("RX-AUTH-1", "insulin", date(2026, 1, 1), date(2026, 12, 31))
     rogue = Physician(cert_id="cert:not-registered")
     try:
