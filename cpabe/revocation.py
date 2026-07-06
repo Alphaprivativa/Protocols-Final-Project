@@ -63,7 +63,8 @@ def ratchet(opening: bytes) -> bytes:
 # --------------------------------------------------------------------------- #
 # Registry (stands in for the pairing accumulator of the final design)         #
 # --------------------------------------------------------------------------- #
-#TODO: Optimize nullifier implementation
+
+#TODO: Optimize nullifier implementation via cryptographic accumulator
 class NullifierRegistry:
     """A public registry of valid prescription handles ``NN_i``.
 

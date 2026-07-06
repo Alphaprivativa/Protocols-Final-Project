@@ -85,8 +85,8 @@ def bootstrap(kem, drug="antiretroviral",
     return authority, physician, pharmacy, patient
 
 
-def run_handshake(pharmacy, patient, now):
-    req = patient.start_handshake(now)
+def run_handshake(pharmacy: Pharmacy, patient: Patient, now: date|None = None):
+    req = patient.start_handshake() if now is None else patient.start_handshake(now)
     challenge, session = pharmacy.make_challenge(req)
     response = patient.answer_challenge(challenge)
     medicine = pharmacy.verify_and_dispense(session, response)
@@ -99,7 +99,7 @@ def run_handshake(pharmacy, patient, now):
 def scenario_happy(kem):
     hr("Scenario 1 - Happy path: valid credential, in-date  (S2, S4, F1)")
     _, _, pharmacy, patient = bootstrap(kem)
-    medicine, challenge, _, _ = run_handshake(pharmacy, patient, date(2026, 6, 15))
+    medicine, challenge, _, _ = run_handshake(pharmacy, patient)
     step(f"pharmacy encrypted under AP = {challenge.ap.render()}")
     step("the two comparisons check not_before <= today <= expires_at natively")
     assert medicine is not None

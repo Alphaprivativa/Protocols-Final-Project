@@ -40,6 +40,9 @@ from .primitives import H, rand_bytes, BLOCK
 from .revocation import (
     NullifierRegistry, nullifier, handle, ratchet,
 )
+from .kem import CpAbeKem
+
+from datetime import datetime
 
 
 # --------------------------------------------------------------------------- #
@@ -109,7 +112,7 @@ class PharmSession:
 # Medical Authority (Issuer / TA)                                              #
 # --------------------------------------------------------------------------- #
 class MedicalAuthority:
-    def __init__(self, kem):
+    def __init__(self, kem: CpAbeKem):
         self.kem = kem
         self._sign = Ed25519PrivateKey.generate()
         self.pub = self._sign.public_key()
@@ -204,7 +207,7 @@ class Physician:
 # Patient (Holder / Prover)                                                    #
 # --------------------------------------------------------------------------- #
 class Patient:
-    def __init__(self, kem, patient_id: bytes):
+    def __init__(self, kem: CpAbeKem, patient_id: bytes):
         self.kem = kem
         self.patient_id = patient_id
         self.pp: Optional[PublicParams] = None
@@ -226,7 +229,7 @@ class Patient:
         self._session = {}
 
     # Phase 3 -- prover side of the ETSI handshake.
-    def start_handshake(self, now: date) -> Request:
+    def start_handshake(self, now: date = datetime.now().date()) -> Request:
         req = RequestGen(self.cred.attributes, now)
         self._session = {"req": req}
         return req
@@ -257,7 +260,7 @@ class Patient:
 # Pharmacy (Verifier)                                                          #
 # --------------------------------------------------------------------------- #
 class Pharmacy:
-    def __init__(self, kem, pharmacy_id: bytes):
+    def __init__(self, kem: CpAbeKem, pharmacy_id: bytes):
         self.kem = kem
         self.pharmacy_id = pharmacy_id
         self.pp: Optional[PublicParams] = None
