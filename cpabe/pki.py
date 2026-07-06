@@ -1,30 +1,29 @@
 """
-The CP-ABE key-encapsulation interface the protocol is built on.
+The attribute-based public-key encryption (CP-ABE) interface the protocol is
+built on, plus a small extensible backend registry.
 
-The report (Section 3.1) relies on an encapsulation mechanism
+Design note (why PKE, not a PKI + FO transform).  OpenABE's ``oabe_enc`` /
+``oabe_dec`` already implement a *CCA-secure* attribute-based encryption scheme:
+internally that is exactly the CP-WATERS PKI wrapped in a Fujisaki-Okamoto /
+PKI-DEM transform with AES-GCM (the "CCA Scheme Context" of the OpenABE API
+guide).  So the report's Algorithms 1-2 (an outer FO transform over a raw PKI)
+would only *re-derive*, on top of OpenABE, machinery OpenABE already provides.
+We therefore expose OpenABE directly as a public-key encryption primitive:
 
-    Pi = (Setup, KeyGen, Encaps, Decaps)
+    Setup(lambda)            -> (mpk, msk)
+    KeyGen_{msk,mpk}(S)      -> sk
+    Encrypt(mpk, AP, m)      -> ct            (CCA-secure ABE encryption)
+    Decrypt(sk, ct)          -> m  or  None   (m iff attrs(sk) |= AP)
 
-"like the CP-WATERS-KEM", wrapped in the Fujisaki-Okamoto-style transform of
-Algorithms 1 and 2.  This module defines that interface plus a small **backend
-registry**, so the protocol code stays backend-agnostic and new backends can be
-plugged in for future development (see :func:`register_backend`).
+The anonymous challenge-response of the protocol is then simply: the verifier
+encrypts a fresh random nonce ``R`` under the dispensing policy ``AP``; a holder
+whose attributes satisfy ``AP`` decrypts it and returns ``R``.  (See
+``principals.py`` for how prover-side anonymity is handled without the FO
+re-encryption check.)
 
-The only backend registered today is the real thing: Zeutro's OpenABE, driven
-through its command-line tools (the CP-WATERS scheme, ``-s CP``) -- the
-"Multiplatform OpenABE Wrapper" primitive the proposal points at, used here
-directly through OpenABE's own CLI.
-
-KEM contract:
-
-    Encaps(mpk, AP, coins) -> ct          -- encapsulates the randomness ``coins``
-    Decaps(sk, ct, AP)     -> coins or None  -- returns it iff attrs(sk) |= AP
-
-The KEM key used in Algorithm 1 is ``k = kdf(coins)``.  OpenABE encryption is
-randomized, so ``deterministic_ciphertext`` is False and Algorithm 2's
-re-encryption check compares the *decapsulated* randomness against the
-recomputed ``R'`` (equivalent by KEM correctness, and it never puts the secret
-randomness on the wire -- see ``fo.py``).
+The protocol code stays backend-agnostic through :class:`AbePki`, and new
+backends can be plugged in for future development via :func:`register_backend`.
+The only backend registered today is Zeutro's OpenABE (CP-WATERS, ``-s CP``).
 """
 
 from __future__ import annotations
@@ -33,25 +32,17 @@ import abc
 import shutil
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Callable, Dict, FrozenSet, List, Optional, Protocol, Tuple
+from typing import Callable, FrozenSet, List, Optional, Tuple
 
 
-class Ciphertext(Protocol):
-    """A KEM ciphertext: serialisable (to travel over the wire) and comparable."""
+class AbePki(abc.ABC):
+    """Attribute-based public-key encryption (CP-ABE), CCA-secure.
 
-    def __eq__(self, other: object) -> bool: ...
-
-    def to_bytes(self) -> bytes: ...
-
-
-class CpAbeKem(abc.ABC):
-    """Abstract CP-ABE key-encapsulation mechanism."""
+    A ciphertext is opaque ``bytes`` (whatever the backend produces); the policy
+    travels inside it, so :meth:`decrypt` needs only the key and the ciphertext.
+    """
 
     name: str = "abstract"
-
-    #: Whether ``encaps`` is byte-identical for identical coins.  OpenABE's is
-    #: randomized (False), so Algorithm 2 uses decapsulated-randomness equality.
-    deterministic_ciphertext: bool = False
 
     @abc.abstractmethod
     def setup(self) -> Tuple[object, object]:
@@ -63,18 +54,13 @@ class CpAbeKem(abc.ABC):
         (report: ``sk <- KeyGen_{msk,mpk}(S)``)."""
 
     @abc.abstractmethod
-    def encaps(self, mpk: object, policy, coins: bytes) -> Ciphertext:
-        """Encapsulate ``coins`` under ``policy``
-        (report: ``c`` of ``(k, c) <- Encaps(AP, R')``)."""
+    def encrypt(self, mpk: object, policy, plaintext: bytes) -> bytes:
+        """CCA-secure ABE-encrypt ``plaintext`` under ``policy`` -> ciphertext."""
 
     @abc.abstractmethod
-    def decaps(self, sk: object, ct: Ciphertext, policy) -> Optional[bytes]:
-        """Recover the encapsulated randomness iff the key's attributes satisfy
-        ``policy``; else return ``None``  (report: ``Decaps(sk, c, AP)``)."""
-
-    @abc.abstractmethod
-    def ciphertext_from_bytes(self, raw: bytes) -> Ciphertext:
-        """Rebuild a ciphertext object from its wire encoding."""
+    def decrypt(self, sk: object, ciphertext: bytes) -> Optional[bytes]:
+        """Return the plaintext iff the key's attributes satisfy the policy
+        embedded in ``ciphertext``; otherwise return ``None``."""
 
 
 # --------------------------------------------------------------------------- #
@@ -84,38 +70,33 @@ class CpAbeKem(abc.ABC):
 class BackendSpec:
     """Describes one CP-ABE backend.
 
-    * ``factory``   builds a fresh :class:`CpAbeKem` instance (imported lazily so
+    * ``factory``   builds a fresh :class:`AbePki` instance (imported lazily so
                     an unused backend never pulls in its dependencies).
-    * ``available`` returns True iff this backend can actually run right now
-                    (e.g. its native tools are installed).
-    * ``hint``      shown to the user when the backend is selected but not
-                    available (how to make it available).
+    * ``available`` returns True iff this backend can actually run right now.
+    * ``hint``      shown when the backend is selected but not available.
     """
     name: str
-    factory: Callable[[], "CpAbeKem"]
+    factory: Callable[[], "AbePki"]
     available: Callable[[], bool]
     description: str = ""
     hint: str = ""
 
 
-# Insertion order == auto-selection preference.
-_BACKENDS: "OrderedDict[str, BackendSpec]" = OrderedDict()
+_BACKENDS: "OrderedDict[str, BackendSpec]" = OrderedDict()   # order == preference
 
 
 def register_backend(spec: BackendSpec) -> None:
     """Register a CP-ABE backend so it can be picked via :func:`select_backend`.
 
-    Adding a future backend is just:  implement :class:`CpAbeKem`, then ::
+    Adding a future backend is just: implement :class:`AbePki`, then ::
 
-        from cpabe.kem import BackendSpec, register_backend
+        from cpabe.pki import BackendSpec, register_backend
         register_backend(BackendSpec(
             name="mybackend",
-            factory=lambda: MyKem(),
+            factory=lambda: MyAbePki(),
             available=lambda: True,
             description="my experimental CP-ABE backend",
         ))
-
-    Backends are tried in registration order during auto-selection.
     """
     _BACKENDS[spec.name] = spec
 
@@ -131,7 +112,7 @@ def available_backends() -> List[str]:
 
 
 # --------------------------------------------------------------------------- #
-# OpenABE availability + backend registration                                  #
+# OpenABE availability + registration                                          #
 # --------------------------------------------------------------------------- #
 def openabe_available() -> bool:
     """True iff the OpenABE command-line tools are on the PATH."""
@@ -139,9 +120,9 @@ def openabe_available() -> bool:
                                          "oabe_enc", "oabe_dec"))
 
 
-def _make_openabe() -> "CpAbeKem":
+def _make_openabe() -> "AbePki":
     from . import openabe_backend
-    return openabe_backend.OpenABEKEM()
+    return openabe_backend.OpenABEPki()
 
 
 _OPENABE_HINT = (
@@ -157,7 +138,7 @@ register_backend(BackendSpec(
     name="openabe",
     factory=_make_openabe,
     available=openabe_available,
-    description="Zeutro OpenABE CLI (CP-WATERS-KEM, scheme CP) -- the real primitive",
+    description="Zeutro OpenABE CLI (CP-ABE / CP-WATERS, scheme CP) -- the real primitive",
     hint=_OPENABE_HINT,
 ))
 
@@ -165,14 +146,12 @@ register_backend(BackendSpec(
 # --------------------------------------------------------------------------- #
 # Selection                                                                    #
 # --------------------------------------------------------------------------- #
-def select_backend(prefer: Optional[str] = None) -> CpAbeKem:
-    """Return a CP-ABE KEM instance.
+def select_backend(prefer: Optional[str] = None) -> AbePki:
+    """Return a CP-ABE PKE instance.
 
     ``prefer``:
-        * ``None`` -- auto-select the first *available* registered backend
-          (in registration/preference order).
-        * a name  -- use that specific backend; raises if it is unknown or not
-          currently available.
+        * ``None`` -- auto-select the first *available* registered backend.
+        * a name  -- use that specific backend; raises if unknown or unavailable.
     """
     if prefer is not None:
         spec = _BACKENDS.get(prefer)
@@ -187,13 +166,12 @@ def select_backend(prefer: Optional[str] = None) -> CpAbeKem:
                 + (spec.hint or "")
             )
         return spec.factory()
-
+    
     # Auto: first available backend in preference order.
     for spec in _BACKENDS.values():
         if spec.available():
             return spec.factory()
 
-    # Nothing available -- report how to enable the preferred (first) backend.
     hints = "\n".join(s.hint for s in _BACKENDS.values() if s.hint)
     raise RuntimeError(
         "No CP-ABE backend is available.\n"

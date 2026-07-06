@@ -4,7 +4,7 @@ The four principals and the message flow of the main protocol (Section 3.2).
     Medical Authority  = Issuer / Trusted Authority (holds mpk, msk)
     Physician          = honest party authoring prescriptions (cannot mint keys)
     Patient            = Holder / Prover (holds the ABE secret key)
-    Pharmacy           = Verifier (encrypts the challenge; honest-but-curious)
+    Pharmacy           = Verifier (ABE-encrypts the challenge; honest-but-curious)
 
 Phases:
     0  Initialization        -- Authority.setup() publishes mpk (authenticated, S6)
@@ -25,14 +25,13 @@ from the channel (the pharmacy is the adversary there).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Dict, FrozenSet, Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey, Ed25519PublicKey,
 )
 
-from . import fo
 from .policy import (
     Prescription, Request, Policy, RequestGen, PolicyGen, DataGen,
 )
@@ -40,10 +39,7 @@ from .primitives import H, rand_bytes, BLOCK
 from .revocation import (
     NullifierRegistry, nullifier, handle, ratchet,
 )
-from .kem import CpAbeKem
-
-from datetime import datetime
-
+from .pki import AbePki
 
 # --------------------------------------------------------------------------- #
 # Canonical encodings for the signed objects                                   #
@@ -60,7 +56,7 @@ def _credential_fingerprint(attrs: FrozenSet[str], patient_id: bytes) -> bytes:
     return H(b"credential", patient_id, blob)
 
 
-def _mpk_fingerprint(mpk: object) -> bytes:
+def _mpk_fingerprint(mpk) -> bytes:
     # OpenABE master public carries its bytes in `.mpk`.
     if hasattr(mpk, "mpk"):
         return H(b"mpk", mpk.mpk)
@@ -72,7 +68,7 @@ def _mpk_fingerprint(mpk: object) -> bytes:
 # --------------------------------------------------------------------------- #
 @dataclass
 class PublicParams:
-    mpk: object                             # for OpenABE backend this will be bytes type
+    mpk: object
     authority_pub: Ed25519PublicKey
     signature: bytes                        # over _mpk_fingerprint(mpk)  (S6)
 
@@ -96,9 +92,8 @@ class Credential:
 
 @dataclass
 class Challenge:
-    c: object                               # KEM ciphertext part
-    cprime: bytes                           # H(k) XOR R
-    ap: Policy                              # advertised policy (patient re-derives its own)
+    ct: bytes                               # ABE ciphertext of the nonce R under AP
+    ap: Policy                              # advertised dispensing policy
 
 
 @dataclass
@@ -112,8 +107,8 @@ class PharmSession:
 # Medical Authority (Issuer / TA)                                              #
 # --------------------------------------------------------------------------- #
 class MedicalAuthority:
-    def __init__(self, kem: CpAbeKem):
-        self.kem = kem
+    def __init__(self, pki: AbePki):
+        self.pki = pki
         self._sign = Ed25519PrivateKey.generate()
         self.pub = self._sign.public_key()
         self.mpk = None
@@ -124,7 +119,7 @@ class MedicalAuthority:
 
     # Phase 0
     def setup(self) -> PublicParams:
-        self.mpk, self.msk = self.kem.setup()
+        self.mpk, self.msk = self.pki.setup()
         sig = self._sign.sign(_mpk_fingerprint(self.mpk))
         return PublicParams(mpk=self.mpk, authority_pub=self.pub, signature=sig)
 
@@ -148,10 +143,9 @@ class MedicalAuthority:
         pub.verify(req.signature, _request_payload(req.patient_id, req.presc))
 
         S = req.presc.key_attributes()
-        sk = self.kem.keygen(self.msk, self.mpk, S)
+        sk = self.pki.keygen(self.msk, self.mpk, S)
         opening0 = rand_bytes(BLOCK)
 
-        #TODO: Optimize nullifier implementation
         if uses is not None:
             # Publish handles NN_0 .. NN_{uses-1} (ratcheted openings).
             s_i = opening0
@@ -207,8 +201,8 @@ class Physician:
 # Patient (Holder / Prover)                                                    #
 # --------------------------------------------------------------------------- #
 class Patient:
-    def __init__(self, kem: CpAbeKem, patient_id: bytes):
-        self.kem = kem
+    def __init__(self, pki: AbePki, patient_id: bytes):
+        self.pki = pki
         self.patient_id = patient_id
         self.pp: Optional[PublicParams] = None
         self.cred: Optional[Credential] = None
@@ -229,22 +223,31 @@ class Patient:
         self._session = {}
 
     # Phase 3 -- prover side of the ETSI handshake.
-    def start_handshake(self, now: date = datetime.now().date()) -> Request:
+    def start_handshake(self, now: date = datetime.now().date()) -> Request | None:
+        if self.cred is None: return None
         req = RequestGen(self.cred.attributes, now)
         self._session = {"req": req}
         return req
 
     def answer_challenge(self, ch: Challenge) -> Optional[bytes]:
-        """Run DecABE (Algorithm 2) with the patient's *own* view of the policy.
+        """Answer the verifier's challenge by decrypting it with the credential.
 
-        Returns the recovered ``R`` on success, or ``None`` to abort -- which
-        happens both when the credential does not satisfy the policy and when
-        the re-encryption check fails (a malicious verifier's crafted
-        challenge).  This is the report's "FIX (B)": the honest patient only
-        proceeds for AP = PolicyGen(RequestGen(S)) of its own credential.
+        Prover-side consistency (report "FIX (B)"): the honest patient engages
+        only with a challenge whose advertised policy equals the canonical AP of
+        the prescription it is presenting -- AP = PolicyGen(RequestGen(S)).  It
+        then ABE-decrypts the nonce; success requires its attributes to satisfy
+        AP (and, via the numerical date attributes, the credential to be in
+        date).  Returns the recovered nonce, or ``None`` to abort.
+
+        (With OpenABE's built-in CCA encryption used directly there is no FO
+        re-encryption check; anonymity therefore rests on the honest-but-curious
+        verifier assumption A3 -- see the README for this trade-off.)
         """
-        ap = PolicyGen(self._session["req"])
-        return fo.dec_abe(self.kem, self.pp.mpk, self.cred.sk, ap, ch.c, ch.cprime)
+        expected = PolicyGen(self._session["req"]).canonical()
+        if self.cred is None: return None
+        if ch.ap.canonical() != expected: return None
+
+        return self.pki.decrypt(self.cred.sk, ch.ct)
 
     # Redemption under !A5 -- reveal the current nullifier, then ratchet (F2/S7).
     def current_nullifier(self) -> bytes:
@@ -260,8 +263,8 @@ class Patient:
 # Pharmacy (Verifier)                                                          #
 # --------------------------------------------------------------------------- #
 class Pharmacy:
-    def __init__(self, kem: CpAbeKem, pharmacy_id: bytes):
-        self.kem = kem
+    def __init__(self, pki: AbePki, pharmacy_id: bytes):
+        self.pki = pki
         self.pharmacy_id = pharmacy_id
         self.pp: Optional[PublicParams] = None
 
@@ -269,14 +272,14 @@ class Pharmacy:
         pp.authority_pub.verify(pp.signature, _mpk_fingerprint(pp.mpk))
         self.pp = pp
 
-    # TODO: Consider adding a check for date being really NOW
     # Phase 3 -- verifier side: compile the dispensing policy and challenge.
     def make_challenge(self, req: Request):
+        if self.pp is None: return None, None
         ap = PolicyGen(req)                    # the dispensing rule
         data = DataGen(req)                    # the medicine to hand over
-        R = rand_bytes(BLOCK)                  # fresh K_chosen || r_chosen (S3, S5)
-        c, cprime = fo.enc_abe(self.kem, self.pp.mpk, ap, R)   # Algorithm 1
-        return Challenge(c=c, cprime=cprime, ap=ap), PharmSession(R=R, ap=ap, data=data)
+        R = rand_bytes(BLOCK)                  # fresh nonce per session (S3, S5)
+        ct = self.pki.encrypt(self.pp.mpk, ap, R)   # CCA-secure ABE encryption
+        return Challenge(ct=ct, ap=ap), PharmSession(R=R, ap=ap, data=data)
 
     # Phase 4 -- verify the response and dispense (A5 path: no extra bookkeeping).
     def verify_and_dispense(self, session: PharmSession,

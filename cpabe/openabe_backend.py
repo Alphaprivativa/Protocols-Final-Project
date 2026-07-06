@@ -1,43 +1,31 @@
 """
-A CP-ABE backend that drives Zeutro's OpenABE through its command-line tools.
+A CP-ABE backend that drives Zeutro's OpenABE through its command-line tools,
+exposed as a public-key encryption primitive (:class:`~cpabe.pki.AbePki`).
 
-This is the primitive the proposal actually points at -- the "Multiplatform
-OpenABE Wrapper [2]" -- used here *directly* through OpenABE's own CLI, which
-is the simplest way to obtain the real CP-WATERS-KEM without a JNI / Kotlin
-Native build.  It is selected automatically by :func:`cpabe.kem.select_backend`
-whenever the ``oabe_*`` tools are on the PATH (see ``openabe/build_openabe.sh``
-and ``openabe/Dockerfile`` for how to obtain them).
+This is the primitive the proposal points at -- the "Multiplatform OpenABE
+Wrapper [2]" -- used here *directly* through OpenABE's own CLI (CP-WATERS,
+``-s CP``).  ``oabe_enc`` / ``oabe_dec`` already provide CCA-secure ABE
+encryption (PKI + FO/AES-GCM internally), so we use them as-is: no outer
+PKI/FO transform is re-implemented.
 
-Mapping to OpenABE's tools (scheme ``-s CP`` = CP-ABE / CP-WATERS), following
-OpenABE's documented CLI, whose default key filenames are ``mpk.cpabe`` /
-``msk.cpabe`` (written into the working directory):
+Mapping to OpenABE's tools (default key filenames ``mpk.cpabe`` / ``msk.cpabe``):
 
-    Setup   ->  oabe_setup  -s CP                          (writes mpk.cpabe, msk.cpabe)
-    KeyGen  ->  oabe_keygen -s CP -i "a|b|c" -o <key>      (writes <key>.key)
-    Encaps  ->  oabe_enc    -s CP -e "<policy>" -i R'.bin -o ct
-    Decaps  ->  oabe_dec    -s CP -k <key>.key -i ct -o R'.out
+    Setup    ->  oabe_setup  -s CP                          (writes mpk.cpabe, msk.cpabe)
+    KeyGen   ->  oabe_keygen -s CP -i "a|b|c" -o <key>      (writes <key>.key)
+    Encrypt  ->  oabe_enc    -s CP -e "<policy>" -i pt -o ct
+    Decrypt  ->  oabe_dec    -s CP -k <key>.key -i ct -o pt
 
-IMPORTANT design note.  ``oabe_setup`` can drop *several* files in the working
-directory (not only ``mpk`` / ``msk`` -- e.g. scheme parameter files), and the
-other tools expect to find them there.  We therefore run **every** OpenABE
-operation inside a single, persistent working directory owned by this KEM
-instance, created once at ``setup``, rather than shuttling only ``mpk`` / ``msk``
-between throwaway temp dirs.  Each call uses unique filenames so repeated
-keygen / encaps / decaps operations never clobber one another.  In this
-single-process PoC the same KEM object is shared by all principals, so one
-working directory is exactly right.
+IMPORTANT.  ``oabe_setup`` can drop *several* files in the working directory
+(scheme parameter files, not only ``mpk`` / ``msk``), and the other tools expect
+to find them there.  We therefore run **every** OpenABE operation inside a
+single, persistent working directory owned by this backend instance, created
+once at ``setup``.  Each call uses unique filenames so repeated operations never
+clobber one another.  In this single-process PoC the same backend object is
+shared by all principals, so one working directory is exactly right.
 
-Because OpenABE encryption is randomized, ciphertexts are *not* byte-stable, so
-``deterministic_ciphertext`` is False and the FO re-encryption check of
-Algorithm 2 uses decapsulated-randomness equality (see ``fo.py``), which is
-equivalent by KEM correctness and never places the secret randomness on the
-wire.  The randomness ``R'`` is exactly 32 bytes and is what OpenABE transports
-as its payload; the KEM key is ``k = kdf(R')`` (computed in the FO layer).
-
-NOTE.  Exact CLI flag spellings and output-file extensions vary slightly across
-OpenABE releases.  The commands below follow the documented interface; if your
-build differs, adjust the ``_run`` invocations here only -- nothing else in the
-proof of concept needs to change.
+NOTE.  Exact CLI flag spellings / output-file extensions vary slightly across
+OpenABE releases; if your build differs, adjust the ``_run`` invocations here
+only -- nothing else in the proof of concept needs to change.
 """
 
 from __future__ import annotations
@@ -53,8 +41,7 @@ from dataclasses import dataclass
 from typing import FrozenSet, List, Optional
 
 from . import policy as pol
-from .kem import CpAbeKem
-from .primitives import BLOCK, F
+from .pki import AbePki
 
 _SCHEME = "CP"
 _MPK = "mpk.cpabe"           # OpenABE default master-public filename
@@ -82,33 +69,13 @@ class OAUserKey:
     attributes: FrozenSet[str]
 
 
-@dataclass
-class OACiphertext:
-    blob: bytes
-
-    def to_bytes(self) -> bytes:
-        return self.blob
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, OACiphertext) and self.blob == other.blob
-
-    def __hash__(self) -> int:
-        return hash(self.blob)
-
-
-# --------------------------------------------------------------------------- #
-# Helpers                                                                      #
-# --------------------------------------------------------------------------- #
-# (Policy rendering and attribute sanitisation now live in cpabe.policy, which
-#  produces OpenABE-native policy strings and attribute tokens directly.)
-
-
 # --------------------------------------------------------------------------- #
 # The backend                                                                  #
 # --------------------------------------------------------------------------- #
-class OpenABEKEM(CpAbeKem):
-    name = "OpenABE CLI (CP-WATERS-KEM, scheme CP)"
+class OpenABEPki(AbePki):
+    name = "OpenABE CLI (CP-ABE / CP-WATERS, scheme CP)"
     deterministic_ciphertext = False       # OpenABE encryption is randomized
+
 
     def __init__(self) -> None:
         self._dir: Optional[str] = None    # persistent working directory
@@ -151,11 +118,10 @@ class OpenABEKEM(CpAbeKem):
             return fh.read()
 
     def _ensure_master(self, mpk: bytes, msk: Optional[bytes] = None) -> None:
-        """Write the master files that this operation will use into the working
-        dir.  Any *extra* files ``oabe_setup`` produced (e.g. scheme parameter
-        files, which are the same for every authority of a given scheme) are
-        left untouched; only ``mpk`` / ``msk`` are (re)written, so several
-        authorities can share one KEM instance across the demo scenarios."""
+        """Write the master files this operation needs into the working dir.
+        Extra files ``oabe_setup`` produced (scheme parameters, identical across
+        authorities) are left untouched; only ``mpk`` / ``msk`` are (re)written,
+        so several authorities can share one backend instance in the demo."""
         self._write(_MPK, mpk)
         if msk is not None:
             self._write(_MSK, msk)
@@ -170,10 +136,9 @@ class OpenABEKEM(CpAbeKem):
     # -- KeyGen -------------------------------------------------------------- #
     def keygen(self, msk: OAMasterSecret, mpk: OAMasterPublic,
                attributes: FrozenSet[str]):
-        # Attributes are already in OpenABE's native form: categorical tokens
-        # (e.g. "drug_antiretroviral") and numerical assignments (e.g.
-        # "expires_at = 9663").  Pass them straight through -- sanitising here
-        # would corrupt the "name = value" numerical attributes.
+        # Attributes are already OpenABE-native: categorical tokens (e.g.
+        # "drug_antiretroviral") and numerical assignments (e.g.
+        # "expires_at = 9663").  Pass them straight through.
         attrs = sorted(attributes)
         self._ensure_master(msk.mpk, msk.msk)
         tag = "key_" + uuid.uuid4().hex[:8]
@@ -182,28 +147,25 @@ class OpenABEKEM(CpAbeKem):
         key = self._read(tag + ".key")
         return OAUserKey(key=key, mpk=mpk.mpk, attributes=frozenset(attributes))
 
-    # -- Encaps -------------------------------------------------------------- #
-    def encaps(self, mpk: OAMasterPublic, policy: pol.Policy,
-               coins: bytes) -> OACiphertext:
-        if len(coins) != BLOCK:
-            coins = F(coins, info=b"coins-normalise")
+    # -- Encrypt ------------------------------------------------------------- #
+    def encrypt(self, mpk: OAMasterPublic, policy: pol.Policy,
+                plaintext: bytes) -> bytes:
         self._ensure_master(mpk.mpk)
         tag = uuid.uuid4().hex[:8]
         pin, cout = f"pt_{tag}.bin", f"ct_{tag}.cpabe"
-        self._write(pin, coins)
+        self._write(pin, plaintext)
         self._run_checked(["oabe_enc", "-s", _SCHEME,
                            "-e", policy.render(),
                            "-i", pin, "-o", cout])
-        return OACiphertext(blob=self._read(cout))
+        return self._read(cout)
 
-    # -- Decaps -------------------------------------------------------------- #
-    def decaps(self, sk: OAUserKey, ct: OACiphertext,
-               policy: pol.Policy) -> Optional[bytes]:
+    # -- Decrypt ------------------------------------------------------------- #
+    def decrypt(self, sk: OAUserKey, ciphertext: bytes) -> Optional[bytes]:
         self._ensure_master(sk.mpk)
         tag = uuid.uuid4().hex[:8]
         kfile, cfile, ofile = f"uk_{tag}.key", f"ct_{tag}.cpabe", f"out_{tag}.bin"
         self._write(kfile, sk.key)
-        self._write(cfile, ct.blob)
+        self._write(cfile, ciphertext)
         r = self._run(["oabe_dec", "-s", _SCHEME,
                        "-k", kfile, "-i", cfile, "-o", ofile])
         if r.returncode != 0:
@@ -212,7 +174,3 @@ class OpenABEKEM(CpAbeKem):
             return self._read(ofile)
         except FileNotFoundError:
             return None
-
-    # -- (de)serialisation --------------------------------------------------- #
-    def ciphertext_from_bytes(self, raw: bytes) -> OACiphertext:
-        return OACiphertext(blob=raw)
