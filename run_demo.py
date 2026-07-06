@@ -131,7 +131,7 @@ def scenario_expired(pke):
     _, _, pharmacy, patient = bootstrap(pke)
     now = date(2027, 3, 1)                             # past expires_at
     medicine, challenge, _, _ = run_handshake(pharmacy, patient, now)
-    assert medicine is not None and challenge is not None
+    assert challenge is not None
     step(f"AP = {challenge.ap.render()}  (today={date_to_int(now)} exceeds expires_at)")
     assert medicine is None
     ok("the 'expires_at >= today' comparison fails -> nothing dispensed (F1)")
@@ -143,7 +143,7 @@ def scenario_not_yet_valid(pke):
                                         expires_at=date(2026, 12, 31))
     now = date(2026, 3, 1)                             # before not_before
     medicine, challenge, _, _ = run_handshake(pharmacy, patient, now)
-    if medicine is None or challenge is None: return
+    assert challenge is not None
     step(f"AP = {challenge.ap.render()}  (today={date_to_int(now)} precedes not_before)")
     assert medicine is None
     ok("the 'not_before <= today' comparison fails -> nothing dispensed (F1)")
