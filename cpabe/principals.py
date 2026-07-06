@@ -39,7 +39,7 @@ from .primitives import H, rand_bytes, BLOCK
 from .revocation import (
     NullifierRegistry, nullifier, handle, ratchet,
 )
-from .pki import AbePki
+from .pke import AbePke
 
 # --------------------------------------------------------------------------- #
 # Canonical encodings for the signed objects                                   #
@@ -107,8 +107,8 @@ class PharmSession:
 # Medical Authority (Issuer / TA)                                              #
 # --------------------------------------------------------------------------- #
 class MedicalAuthority:
-    def __init__(self, pki: AbePki):
-        self.pki = pki
+    def __init__(self, pke: AbePke):
+        self.pke = pke
         self._sign = Ed25519PrivateKey.generate()
         self.pub = self._sign.public_key()
         self.mpk = None
@@ -119,7 +119,7 @@ class MedicalAuthority:
 
     # Phase 0
     def setup(self) -> PublicParams:
-        self.mpk, self.msk = self.pki.setup()
+        self.mpk, self.msk = self.pke.setup()
         sig = self._sign.sign(_mpk_fingerprint(self.mpk))
         return PublicParams(mpk=self.mpk, authority_pub=self.pub, signature=sig)
 
@@ -143,7 +143,7 @@ class MedicalAuthority:
         pub.verify(req.signature, _request_payload(req.patient_id, req.presc))
 
         S = req.presc.key_attributes()
-        sk = self.pki.keygen(self.msk, self.mpk, S)
+        sk = self.pke.keygen(self.msk, self.mpk, S)
         opening0 = rand_bytes(BLOCK)
 
         if uses is not None:
@@ -201,8 +201,8 @@ class Physician:
 # Patient (Holder / Prover)                                                    #
 # --------------------------------------------------------------------------- #
 class Patient:
-    def __init__(self, pki: AbePki, patient_id: bytes):
-        self.pki = pki
+    def __init__(self, pke: AbePke, patient_id: bytes):
+        self.pke = pke
         self.patient_id = patient_id
         self.pp: Optional[PublicParams] = None
         self.cred: Optional[Credential] = None
@@ -247,7 +247,7 @@ class Patient:
         if self.cred is None: return None
         if ch.ap.canonical() != expected: return None
 
-        return self.pki.decrypt(self.cred.sk, ch.ct)
+        return self.pke.decrypt(self.cred.sk, ch.ct)
 
     # Redemption under !A5 -- reveal the current nullifier, then ratchet (F2/S7).
     def current_nullifier(self) -> bytes:
@@ -263,8 +263,8 @@ class Patient:
 # Pharmacy (Verifier)                                                          #
 # --------------------------------------------------------------------------- #
 class Pharmacy:
-    def __init__(self, pki: AbePki, pharmacy_id: bytes):
-        self.pki = pki
+    def __init__(self, pke: AbePke, pharmacy_id: bytes):
+        self.pke = pke
         self.pharmacy_id = pharmacy_id
         self.pp: Optional[PublicParams] = None
 
@@ -278,7 +278,7 @@ class Pharmacy:
         ap = PolicyGen(req)                    # the dispensing rule
         data = DataGen(req)                    # the medicine to hand over
         R = rand_bytes(BLOCK)                  # fresh nonce per session (S3, S5)
-        ct = self.pki.encrypt(self.pp.mpk, ap, R)   # CCA-secure ABE encryption
+        ct = self.pke.encrypt(self.pp.mpk, ap, R)   # CCA-secure ABE encryption
         return Challenge(ct=ct, ap=ap), PharmSession(R=R, ap=ap, data=data)
 
     # Phase 4 -- verify the response and dispense (A5 path: no extra bookkeeping).

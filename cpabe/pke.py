@@ -2,11 +2,11 @@
 The attribute-based public-key encryption (CP-ABE) interface the protocol is
 built on, plus a small extensible backend registry.
 
-Design note (why PKE, not a PKI + FO transform).  OpenABE's ``oabe_enc`` /
+Design note (why PKE, not a PKE + FO transform).  OpenABE's ``oabe_enc`` /
 ``oabe_dec`` already implement a *CCA-secure* attribute-based encryption scheme:
-internally that is exactly the CP-WATERS PKI wrapped in a Fujisaki-Okamoto /
-PKI-DEM transform with AES-GCM (the "CCA Scheme Context" of the OpenABE API
-guide).  So the report's Algorithms 1-2 (an outer FO transform over a raw PKI)
+internally that is exactly the CP-WATERS PKE wrapped in a Fujisaki-Okamoto /
+PKE-DEM transform with AES-GCM (the "CCA Scheme Context" of the OpenABE API
+guide).  So the report's Algorithms 1-2 (an outer FO transform over a raw PKE)
 would only *re-derive*, on top of OpenABE, machinery OpenABE already provides.
 We therefore expose OpenABE directly as a public-key encryption primitive:
 
@@ -21,7 +21,7 @@ whose attributes satisfy ``AP`` decrypts it and returns ``R``.  (See
 ``principals.py`` for how prover-side anonymity is handled without the FO
 re-encryption check.)
 
-The protocol code stays backend-agnostic through :class:`AbePki`, and new
+The protocol code stays backend-agnostic through :class:`AbePke`, and new
 backends can be plugged in for future development via :func:`register_backend`.
 The only backend registered today is Zeutro's OpenABE (CP-WATERS, ``-s CP``).
 """
@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from typing import Callable, FrozenSet, List, Optional, Tuple
 
 
-class AbePki(abc.ABC):
+class AbePke(abc.ABC):
     """Attribute-based public-key encryption (CP-ABE), CCA-secure.
 
     A ciphertext is opaque ``bytes`` (whatever the backend produces); the policy
@@ -70,13 +70,13 @@ class AbePki(abc.ABC):
 class BackendSpec:
     """Describes one CP-ABE backend.
 
-    * ``factory``   builds a fresh :class:`AbePki` instance (imported lazily so
+    * ``factory``   builds a fresh :class:`AbePke` instance (imported lazily so
                     an unused backend never pulls in its dependencies).
     * ``available`` returns True iff this backend can actually run right now.
     * ``hint``      shown when the backend is selected but not available.
     """
     name: str
-    factory: Callable[[], "AbePki"]
+    factory: Callable[[], "AbePke"]
     available: Callable[[], bool]
     description: str = ""
     hint: str = ""
@@ -88,12 +88,12 @@ _BACKENDS: "OrderedDict[str, BackendSpec]" = OrderedDict()   # order == preferen
 def register_backend(spec: BackendSpec) -> None:
     """Register a CP-ABE backend so it can be picked via :func:`select_backend`.
 
-    Adding a future backend is just: implement :class:`AbePki`, then ::
+    Adding a future backend is just: implement :class:`AbePke`, then ::
 
-        from cpabe.pki import BackendSpec, register_backend
+        from cpabe.pke import BackendSpec, register_backend
         register_backend(BackendSpec(
             name="mybackend",
-            factory=lambda: MyAbePki(),
+            factory=lambda: MyAbePke(),
             available=lambda: True,
             description="my experimental CP-ABE backend",
         ))
@@ -120,9 +120,9 @@ def openabe_available() -> bool:
                                          "oabe_enc", "oabe_dec"))
 
 
-def _make_openabe() -> "AbePki":
+def _make_openabe() -> "AbePke":
     from . import openabe_backend
-    return openabe_backend.OpenABEPki()
+    return openabe_backend.OpenABEPke()
 
 
 _OPENABE_HINT = (
@@ -146,7 +146,7 @@ register_backend(BackendSpec(
 # --------------------------------------------------------------------------- #
 # Selection                                                                    #
 # --------------------------------------------------------------------------- #
-def select_backend(prefer: Optional[str] = None) -> AbePki:
+def select_backend(prefer: Optional[str] = None) -> AbePke:
     """Return a CP-ABE PKE instance.
 
     ``prefer``:

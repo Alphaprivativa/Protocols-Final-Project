@@ -55,20 +55,20 @@ def digest(obj) -> str:
 # --------------------------------------------------------------------------- #
 # Shared world set-up (Phases 0-2)                                             #
 # --------------------------------------------------------------------------- #
-def bootstrap(pki, drug="antiretroviral",
+def bootstrap(pke, drug="antiretroviral",
               not_before=date(2026, 1, 1), expires_at=date(2026, 12, 31)):
-    authority = MedicalAuthority(pki)
+    authority = MedicalAuthority(pke)
     pp = authority.setup()
     ok("Phase 0: authority ran Setup(); mpk published and signed (S6)")
 
     physician = Physician(cert_id="cert:dr-esposito")
     authority.register_physician(physician.cert_id, physician.pub)
 
-    pharmacy = Pharmacy(pki, pharmacy_id=b"pharmacy:via-Brombeis-17")
+    pharmacy = Pharmacy(pke, pharmacy_id=b"pharmacy:via-Brombeis-17")
     pharmacy.receive_params(pp)
     ok("pharmacy fetched mpk and verified its authenticity (S6)")
 
-    patient = Patient(pki, patient_id=b"patient:MRDDRM60R30Z600D")
+    patient = Patient(pke, patient_id=b"patient:MRDDRM60R30Z600D")
     patient.receive_params(pp)
 
     presc = Prescription("RX-2026-000123", drug, not_before, expires_at)
@@ -101,9 +101,9 @@ def run_handshake(pharmacy: Pharmacy, patient: Patient, now: date | None = None)
 # --------------------------------------------------------------------------- #
 # Scenarios                                                                     #
 # --------------------------------------------------------------------------- #
-def scenario_happy(pki):
+def scenario_happy(pke):
     hr("Scenario 1 - Happy path: valid credential, in-date  (S2, S4, F1)")
-    _, _, pharmacy, patient = bootstrap(pki)
+    _, _, pharmacy, patient = bootstrap(pke)
     medicine, challenge, _, _ = run_handshake(pharmacy, patient, date(2026, 10, 6))
     assert medicine is not None and challenge is not None
     step(f"pharmacy encrypted under AP = {challenge.ap.render()}")
@@ -113,9 +113,9 @@ def scenario_happy(pki):
     ok("pharmacy learned only the single 'policy satisfied' bit - no identity (S2)")
 
 
-def scenario_wrong_drug(pki):
+def scenario_wrong_drug(pke):
     hr("Scenario 2 - Wrong medicine requested  (S4)")
-    _, _, pharmacy, patient = bootstrap(pki)
+    _, _, pharmacy, patient = bootstrap(pke)
     now = date(2026, 6, 15)
     patient.start_handshake(now)                       # patient holds antiretroviral
     bad_req = Request(drug_code="insulin", today=date_to_int(now), now=now)
@@ -126,9 +126,9 @@ def scenario_wrong_drug(pki):
     ok("no antiretroviral->insulin substitution: handshake fails (S4)")
 
 
-def scenario_expired(pki):
+def scenario_expired(pke):
     hr("Scenario 3 - Expired credential: today > expires_at  (F1)")
-    _, _, pharmacy, patient = bootstrap(pki)
+    _, _, pharmacy, patient = bootstrap(pke)
     now = date(2027, 3, 1)                             # past expires_at
     medicine, challenge, _, _ = run_handshake(pharmacy, patient, now)
     assert medicine is not None and challenge is not None
@@ -137,9 +137,9 @@ def scenario_expired(pki):
     ok("the 'expires_at >= today' comparison fails -> nothing dispensed (F1)")
 
 
-def scenario_not_yet_valid(pki):
+def scenario_not_yet_valid(pke):
     hr("Scenario 4 - Not-yet-valid credential: today < not_before  (F1)")
-    _, _, pharmacy, patient = bootstrap(pki, not_before=date(2026, 6, 1),
+    _, _, pharmacy, patient = bootstrap(pke, not_before=date(2026, 6, 1),
                                         expires_at=date(2026, 12, 31))
     now = date(2026, 3, 1)                             # before not_before
     medicine, challenge, _, _ = run_handshake(pharmacy, patient, now)
@@ -149,11 +149,11 @@ def scenario_not_yet_valid(pki):
     ok("the 'not_before <= today' comparison fails -> nothing dispensed (F1)")
 
 
-def scenario_forgery(pki):
+def scenario_forgery(pke):
     hr("Scenario 5 - Unforgeability against a non-holder  (S4)")
-    authority, physician, pharmacy, victim = bootstrap(pki)
+    authority, physician, pharmacy, victim = bootstrap(pke)
     now = date(2026, 6, 15)
-    attacker = Patient(pki, patient_id=b"patient:CVNDSN87B14Z613C")
+    attacker = Patient(pke, patient_id=b"patient:CVNDSN87B14Z613C")
     assert victim.pp is not None
     attacker.receive_params(victim.pp)
     bad = Prescription("RX-ATK", "insulin", date(2026, 1, 1), date(2026, 12, 31))
@@ -168,9 +168,9 @@ def scenario_forgery(pki):
     ok("a party without a satisfying credential cannot make the pharmacy dispense (S4)")
 
 
-def scenario_malicious_verifier(pki):
+def scenario_malicious_verifier(pke):
     hr("Scenario 6 - Curious pharmacy probing with a different policy  (S2, A3)")
-    _, _, pharmacy, patient = bootstrap(pki)
+    _, _, pharmacy, patient = bootstrap(pke)
     now = date(2026, 6, 15)
     patient.start_handshake(now)                       # patient presents antiretroviral
     # A curious pharmacy tries to learn extra attributes by advertising a
@@ -178,16 +178,16 @@ def scenario_malicious_verifier(pki):
     probe_req = Request(drug_code="insulin", today=date_to_int(now), now=now)
     probe_ap = PolicyGen(probe_req)
     assert pharmacy.pp is not None
-    ct = pharmacy.pki.encrypt(pharmacy.pp.mpk, probe_ap, rand_bytes(BLOCK))
+    ct = pharmacy.pke.encrypt(pharmacy.pp.mpk, probe_ap, rand_bytes(BLOCK))
     step("pharmacy advertises an insulin probe instead of the presented policy...")
     assert patient.answer_challenge(Challenge(ct=ct, ap=probe_ap)) is None
     ok("prover engages only with its own canonical policy; the probe is refused (S2)")
     step("(no FO re-encryption check now; anonymity rests on honest-but-curious A3)")
 
 
-def scenario_replay(pki):
+def scenario_replay(pke):
     hr("Scenario 7 - Replay of a recorded transcript  (S5)")
-    _, _, pharmacy, patient = bootstrap(pki)
+    _, _, pharmacy, patient = bootstrap(pke)
     now = date(2026, 6, 15)
     med_a, ch_a, resp_a, _ = run_handshake(pharmacy, patient, now)
     assert ch_a is not None and med_a is not None
@@ -200,9 +200,9 @@ def scenario_replay(pki):
     ok("a recorded response does not match a fresh challenge - replay fails (S5)")
 
 
-def scenario_unlinkability(pki):
+def scenario_unlinkability(pke):
     hr("Scenario 8 - Unlinkability of repeated visits  (S3)")
-    _, _, pharmacy, patient = bootstrap(pki)
+    _, _, pharmacy, patient = bootstrap(pke)
     now = date(2026, 6, 15)
     _, ch1, resp1, _ = run_handshake(pharmacy, patient, now)
     _, ch2, resp2, _ = run_handshake(pharmacy, patient, now)
@@ -214,13 +214,13 @@ def scenario_unlinkability(pki):
     ok("two visits with the SAME credential produce uncorrelated transcripts (S3)")
 
 
-def scenario_double_spend(pki):
+def scenario_double_spend(pke):
     hr("Scenario 9 - One-time prescription without A5: double spending  (F2, S7)")
-    authority = MedicalAuthority(pki); pp = authority.setup()
+    authority = MedicalAuthority(pke); pp = authority.setup()
     physician = Physician(cert_id="cert:dr-bianchi")
     authority.register_physician(physician.cert_id, physician.pub)
-    pharmacy = Pharmacy(pki, pharmacy_id=b"pharmacy:Via-Brombeis-17"); pharmacy.receive_params(pp)
-    patient = Patient(pki, patient_id=b"patient:RVILGU44S07B354C"); patient.receive_params(pp)
+    pharmacy = Pharmacy(pke, pharmacy_id=b"pharmacy:Via-Brombeis-17"); pharmacy.receive_params(pp)
+    patient = Patient(pke, patient_id=b"patient:RVILGU44S07B354C"); patient.receive_params(pp)
     presc = Prescription("RX-ONE-777", "salbutamol", date(2026, 1, 1), date(2026, 12, 31))
     patient.store_credential(
         authority.issue(physician.authorize(patient.patient_id, presc), uses=1),
@@ -247,13 +247,13 @@ def scenario_double_spend(pki):
     step("each use reveals a fresh nullifier via S_{i+1}=F(S_i); one-way ratchet (S7)")
 
 
-def scenario_active_revocation(pki):
+def scenario_active_revocation(pke):
     hr("Scenario 10 - Active revocation of an illegitimate credential  (F3)")
-    authority = MedicalAuthority(pki); pp = authority.setup()
+    authority = MedicalAuthority(pke); pp = authority.setup()
     physician = Physician(cert_id="cert:dr-verdi")
     authority.register_physician(physician.cert_id, physician.pub)
-    pharmacy = Pharmacy(pki, pharmacy_id=b"pharmacy:napoli-03"); pharmacy.receive_params(pp)
-    patient = Patient(pki, patient_id=b"patient:BFFGLG78A28B832F"); patient.receive_params(pp)
+    pharmacy = Pharmacy(pke, pharmacy_id=b"pharmacy:napoli-03"); pharmacy.receive_params(pp)
+    patient = Patient(pke, patient_id=b"patient:BFFGLG78A28B832F"); patient.receive_params(pp)
     presc = Prescription("RX-BAD-001", "statin", date(2026, 1, 1), date(2026, 12, 31))
     patient.store_credential(
         authority.issue(physician.authorize(patient.patient_id, presc), uses=3),
@@ -278,9 +278,9 @@ def scenario_active_revocation(pki):
     ok("after revocation the credential is refused (F3)")
 
 
-def scenario_authenticity(pki):
+def scenario_authenticity(pke):
     hr("Scenario 11 - Credential / request authenticity  (S6)")
-    authority = MedicalAuthority(pki); authority.setup()
+    authority = MedicalAuthority(pke); authority.setup()
     physician = Physician(cert_id="cert:dr-neri")
     authority.register_physician(physician.cert_id, physician.pub)
     pid = b"patient:PVLLRD88S26E625K"
@@ -313,17 +313,17 @@ def main() -> int:
 
 
     try:
-        pki = select_backend(prefer=prefer)
+        pke = select_backend(prefer=prefer)
     except RuntimeError as e:
         print(str(e)); return 1
-    print(f"  CP-ABE backend : {pki.name}")
+    print(f"  CP-ABE backend : {pke.name}")
     print(f"  OpenABE on PATH: {openabe_available()}")
 
     for sc in (scenario_happy, scenario_wrong_drug, scenario_expired,
                scenario_not_yet_valid, scenario_forgery, scenario_malicious_verifier,
                scenario_replay, scenario_unlinkability, scenario_double_spend,
                scenario_active_revocation, scenario_authenticity):
-        sc(pki)
+        sc(pke)
 
     hr("All scenarios completed successfully")
     print("  Requirements exercised: S2, S3, S4, S5, S6, S7, F1, F2, F3")

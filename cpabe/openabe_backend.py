@@ -1,12 +1,12 @@
 """
 A CP-ABE backend that drives Zeutro's OpenABE through its command-line tools,
-exposed as a public-key encryption primitive (:class:`~cpabe.pki.AbePki`).
+exposed as a public-key encryption primitive (:class:`~cpabe.pke.AbePke`).
 
 This is the primitive the proposal points at -- the "Multiplatform OpenABE
 Wrapper [2]" -- used here *directly* through OpenABE's own CLI (CP-WATERS,
 ``-s CP``).  ``oabe_enc`` / ``oabe_dec`` already provide CCA-secure ABE
-encryption (PKI + FO/AES-GCM internally), so we use them as-is: no outer
-PKI/FO transform is re-implemented.
+encryption (PKE + FO/AES-GCM internally), so we use them as-is: no outer
+PKE/FO transform is re-implemented.
 
 Mapping to OpenABE's tools (default key filenames ``mpk.cpabe`` / ``msk.cpabe``):
 
@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from typing import FrozenSet, List, Optional
 
 from . import policy as pol
-from .pki import AbePki
+from .pke import AbePke
 
 _SCHEME = "CP"
 _MPK = "mpk.cpabe"           # OpenABE default master-public filename
@@ -72,7 +72,7 @@ class OAUserKey:
 # --------------------------------------------------------------------------- #
 # The backend                                                                  #
 # --------------------------------------------------------------------------- #
-class OpenABEPki(AbePki):
+class OpenABEPke(AbePke):
     name = "OpenABE CLI (CP-ABE / CP-WATERS, scheme CP)"
     deterministic_ciphertext = False       # OpenABE encryption is randomized
 
