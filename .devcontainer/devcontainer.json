@@ -17,5 +17,4 @@
     }
   },
   "remoteUser": "root",
-  "postStartCommand": "python3 run_demo.py --backend openabe"
 }
