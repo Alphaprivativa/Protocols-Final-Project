@@ -1,5 +1,5 @@
 """
-The four principals and the message flow of the main protocol (Section 3.2).
+The four principals and the message flow of the main protocol.
 
     Medical Authority  = Issuer / Trusted Authority (holds mpk, msk)
     Physician          = honest party authoring prescriptions (cannot mint keys)
@@ -15,11 +15,9 @@ Phases:
     4  Redemption            -- Pharmacy.verify_and_dispense() [+ nullifier under !A5]
 
 Channels for Reference Points P / K / R are assumed authenticated and
-integrity-protected (S1); here we make the *authenticity* of the public
-parameters and of the issued credential concrete with Ed25519 signatures (S6),
+integrity-protected; here we make the *authenticity* of the public
+parameters and of the issued credential concrete with Ed25519 signatures,
 and leave channel confidentiality implicit, exactly as the report scopes it.
-The challenge-response itself derives its security from the cryptography, not
-from the channel (the pharmacy is the adversary there).
 """
 
 from __future__ import annotations
@@ -68,7 +66,8 @@ def _mpk_fingerprint(mpk) -> bytes:
 # --------------------------------------------------------------------------- #
 @dataclass
 class PublicParams:
-    mpk: object
+    mpk: object                             # Object since we don't know exactly
+                                            # how it is handled by the specific backend
     authority_pub: Ed25519PublicKey
     signature: bytes                        # over _mpk_fingerprint(mpk)  (S6)
 
@@ -128,13 +127,13 @@ class MedicalAuthority:
 
     # Phase 2  (issuance / update)
     def issue(self, req: SignedRequest, uses: Optional[int] = None) -> Credential:
-        """Verify the physician's certificate and request (S6/A2), then run
+        """Verify the physician's certificate and request, then run
         KeyGen on the prescription attributes and deliver the credential.
 
         ``uses``:  None  -> assumption A5 (chronic, unlimited reuse; no nullifier
                             bookkeeping).
                    n     -> A5 dropped: publish n one-time nullifier handles so
-                            reuse beyond n is detectable (F2).
+                            reuse beyond n is detectable.
         """
         pub = self.physician_pubs.get(req.cert_id)
         if pub is None:
@@ -168,7 +167,7 @@ class MedicalAuthority:
     def revoke(self, presc_id: str, max_uses: int = 128) -> int:
         """Revoke a credential on demand.  Because the Authority knows the
         binding ID_patient <-> S0 it recomputes the whole nullifier chain and
-        removes every handle -- linking the offender's uses by design (F3)."""
+        removes every handle -- linking the offender's uses by design."""
         rec = self._issued.get(presc_id)
         if rec is None:
             return 0
@@ -232,16 +231,15 @@ class Patient:
     def answer_challenge(self, ch: Challenge) -> Optional[bytes]:
         """Answer the verifier's challenge by decrypting it with the credential.
 
-        Prover-side consistency (report "FIX (B)"): the honest patient engages
+        Prover-side consistency: the honest patient engages
         only with a challenge whose advertised policy equals the canonical AP of
         the prescription it is presenting -- AP = PolicyGen(RequestGen(S)).  It
         then ABE-decrypts the nonce; success requires its attributes to satisfy
         AP (and, via the numerical date attributes, the credential to be in
         date).  Returns the recovered nonce, or ``None`` to abort.
 
-        (With OpenABE's built-in CCA encryption used directly there is no FO
-        re-encryption check; anonymity therefore rests on the honest-but-curious
-        verifier assumption A3 -- see the README for this trade-off.)
+        NOTE: With OpenABE's built-in CCA encryption used directly there is no FO
+        re-encryption check, since it is non-deterministic.
         """
         expected = PolicyGen(self._session["req"]).canonical()
         if self.cred is None: return None

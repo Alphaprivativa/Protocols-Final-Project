@@ -2,8 +2,7 @@
 A CP-ABE backend that drives Zeutro's OpenABE through its command-line tools,
 exposed as a public-key encryption primitive (:class:`~cpabe.pke.AbePke`).
 
-This is the primitive the proposal points at -- the "Multiplatform OpenABE
-Wrapper [2]" -- used here *directly* through OpenABE's own CLI (CP-WATERS,
+Zeutro's OpenABE is used here directly through OpenABE's own CLI (CP-WATERS,
 ``-s CP``).  ``oabe_enc`` / ``oabe_dec`` already provide CCA-secure ABE
 encryption (PKE + FO/AES-GCM internally), so we use them as-is: no outer
 PKE/FO transform is re-implemented.
@@ -15,17 +14,13 @@ Mapping to OpenABE's tools (default key filenames ``mpk.cpabe`` / ``msk.cpabe``)
     Encrypt  ->  oabe_enc    -s CP -e "<policy>" -i pt -o ct
     Decrypt  ->  oabe_dec    -s CP -k <key>.key -i ct -o pt
 
-IMPORTANT.  ``oabe_setup`` can drop *several* files in the working directory
+IMPORTANT.  ``oabe_setup`` can drop several files in the working directory
 (scheme parameter files, not only ``mpk`` / ``msk``), and the other tools expect
-to find them there.  We therefore run **every** OpenABE operation inside a
+to find them there.  We therefore run every OpenABE operation inside a
 single, persistent working directory owned by this backend instance, created
 once at ``setup``.  Each call uses unique filenames so repeated operations never
 clobber one another.  In this single-process PoC the same backend object is
 shared by all principals, so one working directory is exactly right.
-
-NOTE.  Exact CLI flag spellings / output-file extensions vary slightly across
-OpenABE releases; if your build differs, adjust the ``_run`` invocations here
-only -- nothing else in the proof of concept needs to change.
 """
 
 from __future__ import annotations
@@ -82,6 +77,13 @@ class OpenABEPke(AbePke):
 
     # -- working dir + process helpers -------------------------------------- #
     def _workdir(self) -> str:
+        """
+        Create a persistent working directory for OpenABE operations.
+        Register a cleanup handler that removes the directory when the
+        Python process exits (normal termination or via sys.exit()).
+        The atexit handler is called automatically by the interpreter
+        at process shutdown.
+        """
         if self._dir is None:
             self._dir = tempfile.mkdtemp(prefix="openabe_poc_")
             atexit.register(shutil.rmtree, self._dir, ignore_errors=True)

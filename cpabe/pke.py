@@ -1,29 +1,17 @@
 """
-The attribute-based public-key encryption (CP-ABE) interface the protocol is
-built on, plus a small extensible backend registry.
+A small extensible backend registry, implemented for generality of the backend 
+system (when we didn't know if OpenABE would work on our machine).
+Initialization of the OpenABE backend then added to the backend system.
 
-Design note (why PKE, not a PKE + FO transform).  OpenABE's ``oabe_enc`` /
-``oabe_dec`` already implement a *CCA-secure* attribute-based encryption scheme:
-internally that is exactly the CP-WATERS PKE wrapped in a Fujisaki-Okamoto /
-PKE-DEM transform with AES-GCM (the "CCA Scheme Context" of the OpenABE API
-guide).  So the report's Algorithms 1-2 (an outer FO transform over a raw PKE)
-would only *re-derive*, on top of OpenABE, machinery OpenABE already provides.
-We therefore expose OpenABE directly as a public-key encryption primitive:
-
+We expose OpenABE directly as a public-key encryption primitive:
     Setup(lambda)            -> (mpk, msk)
     KeyGen_{msk,mpk}(S)      -> sk
-    Encrypt(mpk, AP, m)      -> ct            (CCA-secure ABE encryption)
+    Encrypt(mpk, AP, m)      -> ct
     Decrypt(sk, ct)          -> m  or  None   (m iff attrs(sk) |= AP)
-
-The anonymous challenge-response of the protocol is then simply: the verifier
-encrypts a fresh random nonce ``R`` under the dispensing policy ``AP``; a holder
-whose attributes satisfy ``AP`` decrypts it and returns ``R``.  (See
-``principals.py`` for how prover-side anonymity is handled without the FO
-re-encryption check.)
 
 The protocol code stays backend-agnostic through :class:`AbePke`, and new
 backends can be plugged in for future development via :func:`register_backend`.
-The only backend registered today is Zeutro's OpenABE (CP-WATERS, ``-s CP``).
+The only backend registered so far is Zeutro's OpenABE (CP-WATERS, ``-s CP``).
 """
 
 from __future__ import annotations

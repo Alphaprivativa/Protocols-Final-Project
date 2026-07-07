@@ -1,44 +1,30 @@
 """
 Attribute encoding and the RequestGen / PolicyGen / DataGen pipeline.
 
-This is the concrete counterpart of the report's deterministic pipeline::
-
     S  --RequestGen-->  req  --PolicyGen-->  AP        (access policy)
                              --DataGen--->   data      (the medicine)
 
-and of Section 3.1's prescription credential, whose dispensing policy is
-
-    drug:X  AND  (not_before <= now)  AND  (now <= expires_at).
-
-Time-based revocation (F1), the OpenABE-native way
 --------------------------------------------------
-OpenABE's policy language is not limited to AND/OR trees over opaque strings:
-it supports **numerical attributes** and integer **comparisons** (``<``, ``<=``,
-``=``, ``>=``, ``>``), which it compiles into a compact bit-encoded LSSS -- the
-size grows with the *bit-length* of the numbers, not with the length of the
-interval.  We exploit this directly:
+OpenABE's policy language supports And, or, **numerical attributes** and integer **comparisons** (``<``, ``<=``,
+``=``, ``>=``, ``>``), which it compiles into a compact bit-encoded LSSS. 
+We exploit this directly:
 
     * the credential carries the validity window as two numerical attributes
       ``not_before = <days>`` and ``expires_at = <days>`` (days since 2000-01-01,
-      a small, dense, monotonic integer -- ~14 bits), instead of one attribute
-      per month;
-    * the pharmacy's dispensing policy compares them against the current day::
+      a small, dense, monotonic integer -- ~14 bits);
+    * the pharmacy's dispensing policy compares them against the current day:
 
           drug_<X>  and  not_before <= <today>  and  expires_at >= <today>
 
-An expired (or not-yet-valid) credential fails the comparison, so CP-ABE
-decryption fails and nothing is dispensed -- F1, enforced *inside* the ABE
-layer, so the pharmacy still learns only the single "policy satisfied" bit (S2).
-This is both faithful to the report ("range predicates ... compiled into the
-LSSS access structure") and far more efficient than enumerating time slots:
-the key holds two date attributes instead of dozens.
+        An expired (or not-yet-valid) credential fails the comparison, so CP-ABE
+        decryption fails and nothing is dispensed.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Dict, FrozenSet, List, Set, Tuple
 
 # Epoch for the compact integer date encoding.  Days since this date are small,
@@ -147,14 +133,17 @@ class Prescription:
 class Request:
     """``req = RequestGen(S, now)`` -- only non-identifying information: the
     medicine wanted and the current day.  The prescription id and the exact
-    validity window stay secret inside the key (S2)."""
+    validity window stay secret inside the key."""
     drug_code: str
     today: int             # current day, as days-since-2000
     now: date
 
 
-#NOTE: HERE MAYBE WE SHOULD CHANGE THIS TO TAKE A NUMBER IN INPUT FOR THE CHOSEN DRUG FROM THE ATTRIBUTE SET, AT THE MOMENT FOR SIMPLICITY THIS ONLY HANDLES THE FIRST DRUG
 def _drug_from_attributes(attributes: FrozenSet[str]) -> str:
+    """At the moment this takes the first drug in the attribute set ``S``
+    
+    NOTE:HERE MAYBE WE SHOULD CHANGE THIS TO TAKE A NUMBER IN INPUT FOR THE CHOSEN DRUG FROM THE ATTRIBUTE SET, AT THE MOMENT FOR SIMPLICITY THIS ONLY HANDLES THE FIRST DRUG
+    """
     prefix = _san("drug_")
     for a in attributes:
         if a.startswith(prefix):
@@ -162,7 +151,7 @@ def _drug_from_attributes(attributes: FrozenSet[str]) -> str:
     raise ValueError("credential carries no drug attribute")
 
 
-def RequestGen(attributes: FrozenSet[str], now: date) -> Request:
+def RequestGen(attributes: FrozenSet[str], now: date = datetime.now().date()) -> Request:
     """Derive the presentation request from the credential attributes and the
     current date (the drug is what the patient asks for at the counter)."""
     return Request(drug_code=_drug_from_attributes(attributes),
@@ -188,6 +177,8 @@ def PolicyGen(req: Request) -> Policy:
 # --------------------------------------------------------------------------- #
 # The medicine associated to a request                                         #
 # --------------------------------------------------------------------------- #
+
+# Example formulary
 _FORMULARY: Dict[str, str] = {
     "antiretroviral": "Tenofovir/Emtricitabine 200/245 mg - 30 tablets",
     "insulin": "Insulin glargine 100 U/mL - 5 pens",

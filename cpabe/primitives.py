@@ -1,23 +1,11 @@
 """
 Low-level cryptographic primitives used across the proof of concept.
 
-These map directly onto the symbols used in the report:
-
-    * ``H`` -- a collision-resistant hash modelled as a random oracle
-              (report, Section 3.1: "Let H be a collision-resistant hash
-              function (modelled as a random oracle)").
-    * ``F`` -- a pseudo-random generator (report, Section 3.1: "F a
-              pseudo-random generator").  It is also the one-way function
-              used for the nullifier ratchet ``S_{i+1} = F(S_i)`` of F2/S7.
-    * ``kdf`` -- an HKDF key-derivation wrapper (used to derive the KEM key
-              ``k = kdf(R')`` in the Fujisaki-Okamoto layer).
-    * ``xor`` -- the bitwise XOR used in Algorithms 1 and 2
-              (``c' <- H(k) (+) R`` and ``R <- c' (+) H(k)``).
+    * ``H`` -- a collision-resistant hash function.
+    * ``F`` -- a pseudo-random generator.
 
 Everything is built on SHA-256 / HKDF-SHA256 from the ``cryptography``
-package.  The CP-ABE itself is provided by OpenABE (CP-WATERS-KEM); these
-primitives implement only the surrounding FO transform, nullifier ratchet and
-signatures glue.
+package.
 """
 
 from __future__ import annotations
@@ -73,20 +61,22 @@ def F(seed: bytes, *, length: int = BLOCK, info: bytes = b"F-PRG") -> bytes:
     return HKDFExpand(algorithm=hashes.SHA256(), length=length, info=info).derive(seed)
 
 
-def kdf(key_material: bytes, *, info: bytes, length: int = BLOCK,
-        salt: bytes | None = None) -> bytes:
-    """A general key-derivation wrapper (HKDF-extract-then-expand)."""
-    return HKDF(algorithm=hashes.SHA256(), length=length, salt=salt,
-                info=info).derive(key_material)
+# def kdf(key_material: bytes, *, info: bytes, length: int = BLOCK,
+#         salt: bytes | None = None) -> bytes:
+#     """A general key-derivation wrapper (HKDF-extract-then-expand)."""
+#     return HKDF(algorithm=hashes.SHA256(), length=length, salt=salt,
+#                 info=info).derive(key_material)
 
 
 # --------------------------------------------------------------------------- #
-# XOR                                                                          #
+# utilities                                                                          #
 # --------------------------------------------------------------------------- #
-def xor(a: bytes, b: bytes) -> bytes:
-    if len(a) != len(b):
-        raise ValueError("xor operands must have equal length")
-    return bytes(x ^ y for x, y in zip(a, b))
+
+
+# def xor(a: bytes, b: bytes) -> bytes:
+#     if len(a) != len(b):
+#         raise ValueError("xor operands must have equal length")
+#     return bytes(x ^ y for x, y in zip(a, b))
 
 
 def rand_bytes(n: int = BLOCK) -> bytes:

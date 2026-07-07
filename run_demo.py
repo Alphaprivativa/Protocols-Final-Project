@@ -2,7 +2,7 @@
 """
 End-to-end demonstration of the anonymous e-prescription protocol.
 
-CP-ABE is provided exclusively by the real OpenABE backend (CP-WATERS, -s CP).
+at the moment CP-ABE is provided exclusively by the real OpenABE backend (CP-WATERS, -s CP).
 Build OpenABE first, then run inside that environment:
 
     ./openabe/build_openabe.sh && source run_env.sh   # native, or
@@ -10,9 +10,6 @@ Build OpenABE first, then run inside that environment:
 
     python3 run_demo.py
 
-Time-based validity (F1) is enforced with OpenABE **numerical date comparisons**
-(not_before <= today <= expires_at), so the credential holds just two date
-attributes and the pharmacy checks the window with two integer comparisons.
 Each scenario prints what happens and asserts the expected S*/F* outcome.
 """
 

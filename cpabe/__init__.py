@@ -3,10 +3,10 @@ Proof-of-concept implementation of the anonymous e-prescription protocol
 ("Verifiable Credentials via CP-ABE Challenge-Response").
 
 Public API:
-    get_pke / select_backend  -- obtain a CP-ABE PKE backend
+    select_backend  -- obtain a CP-ABE PKE backend
     register_backend, BackendSpec, available_backends, registered_backends
     MedicalAuthority, Physician, Patient, Pharmacy  -- the four principals
-    Prescription              -- the clinical content authored by a physician
+    Prescription    -- the clinical content authored by a physician
 """
 
 from .pke import (
