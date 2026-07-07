@@ -19,7 +19,7 @@ future development. The only backend registered so far is:
 
 | Backend | What it is | When |
 |---|---|---|
-| **OpenABE** (`cpabe/openabe_backend.py`) | Thin adapter over `oabe_setup/keygen/enc/dec`, scheme `-s CP` — the real CP-WATERS-KEM. | Always (the only backend). |
+| **OpenABE** (`cpabe/openabe_backend.py`) | Thin adapter over `oabe_setup/keygen/enc/dec`, scheme `-s CP` — using the real CP-WATERS-KEM. | Always (the only backend). |
 
 
 
