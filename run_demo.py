@@ -162,7 +162,7 @@ def scenario_forgery(pke):
     attacker._session = {"req": req}
     forged = attacker.answer_challenge(challenge)      # DecABE -> None (unsatisfied)
     assert pharmacy.verify_and_dispense(session, forged) is None
-    ok("a party without a satisfying credential cannot make the pharmacy dispense (S4)")
+    ok("A party without a satisfying credential cannot make the pharmacy dispense (S4)")
 
 
 def scenario_malicious_verifier(pke):
@@ -179,7 +179,7 @@ def scenario_malicious_verifier(pke):
     step("pharmacy advertises an insulin probe instead of the presented policy...")
     assert patient.answer_challenge(Challenge(ct=ct, ap=probe_ap)) is None
     ok("prover engages only with its own canonical policy; the probe is refused (S2)")
-    step("(no FO re-encryption check now; anonymity rests on honest-but-curious A3)")
+    step("(anonymity rests on honest-but-curious A3)")
 
 
 def scenario_replay(pke):

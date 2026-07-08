@@ -101,7 +101,6 @@ class PharmSession:
     ap: Policy
     data: str
 
-
 # --------------------------------------------------------------------------- #
 # Medical Authority (Issuer / TA)                                              #
 # --------------------------------------------------------------------------- #
@@ -115,6 +114,9 @@ class MedicalAuthority:
         self.physician_pubs: Dict[str, Ed25519PublicKey] = {}
         self.registry = NullifierRegistry()
         self._issued: Dict[str, dict] = {}      # presc_id -> {patient_id, opening0, uses}
+        
+        # hash table used to handle used handles
+        self._handle_to_opening: Dict[bytes, dict] = {}
 
     # Phase 0
     def setup(self) -> PublicParams:
@@ -130,10 +132,9 @@ class MedicalAuthority:
         """Verify the physician's certificate and request, then run
         KeyGen on the prescription attributes and deliver the credential.
 
-        ``uses``:  None  -> assumption A5 (chronic, unlimited reuse; no nullifier
-                            bookkeeping).
-                   n     -> A5 dropped: publish n one-time nullifier handles so
-                            reuse beyond n is detectable.
+        ``uses``:  None  -> assumption A5 (chronic, unlimited reuse; no nullifier bookkeeping).
+                   n     -> publish ONLY the FIRST one-time nullifier handle.
+                            Subsequent handles are published lazily after each spend.
         """
         pub = self.physician_pubs.get(req.cert_id)
         if pub is None:
@@ -146,39 +147,72 @@ class MedicalAuthority:
         opening0 = rand_bytes(BLOCK)
 
         if uses is not None:
-            # Publish handles NN_0 .. NN_{uses-1} (ratcheted openings).
+            # Publish the first handle only
             s_i = opening0
-            for _ in range(uses):
-                self.registry.publish(handle(nullifier(s_i, req.patient_id)))
-                s_i = ratchet(s_i)
+            nn_0 = handle(nullifier(s_i, req.patient_id))
+            self.registry.publish(nn_0)
+            self._handle_to_opening[nn_0] = {"presc_id": req.presc.presc_id, "opening": s_i}
+            
         self._issued[req.presc.presc_id] = {
-            "patient_id": req.patient_id, "opening0": opening0, "uses": uses,
+            "patient_id": req.patient_id, 
+            "opening0": opening0, 
+            "current_opening": opening0,
+            "uses": uses,
+            "revoked": False,
+            "current_use": 0
         }
 
         auth_sig = self._sign.sign(_credential_fingerprint(S, req.patient_id))
         return Credential(sk=sk, attributes=S, presc=req.presc,
                           opening0=opening0, auth_sig=auth_sig)
 
-    # Phase 4 helper (only under !A5): confirm a spend by removing the handle.
+    # Phase 4 helper (only under !A5): confirm a spend by removing the handle
+    # and publishing the next one in the chain.
     def confirm_spend(self, nn_handle: bytes) -> bool:
-        return self.registry.remove(nn_handle)
+        if self.registry.remove(nn_handle):
+            info = self._handle_to_opening.pop(nn_handle, None)
+            if info:
+                presc_id = info["presc_id"]
+                s_i = info["opening"]
+                rec = self._issued.get(presc_id)
+                
+                # If not revoked
+                if rec and not rec.get("revoked", False):
+                    rec["current_use"] += 1
+                    # Check if there are uses left
+                    if rec["uses"] is None or rec["current_use"] < rec["uses"]:
+                        s_next = ratchet(s_i)
+                        rec["current_opening"] = s_next
+                        
+                        # Next handle is computed and published on the chain
+                        nn_next = handle(nullifier(s_next, rec["patient_id"]))
+                        self.registry.publish(nn_next)
+                        self._handle_to_opening[nn_next] = {"presc_id": presc_id, "opening": s_next}
+            return True
+        return False
 
     # F3 -- active revocation with deliberate loss of privacy.
     def revoke(self, presc_id: str, max_uses: int = 128) -> int:
         """Revoke a credential on demand.  Because the Authority knows the
-        binding ID_patient <-> S0 it recomputes the whole nullifier chain and
-        removes every handle -- linking the offender's uses by design."""
+        binding ID_patient <-> S0 it removes the currently published handle.
+        Future handles will not be published because the credential is marked as revoked."""
         rec = self._issued.get(presc_id)
         if rec is None:
             return 0
+            
+        # Mark as revoked: confirm_spend does not publish the future handles
+        rec["revoked"] = True
+        
         removed = 0
-        s_i = rec["opening0"]
-        for _ in range(max_uses):
-            if self.registry.remove(handle(nullifier(s_i, rec["patient_id"]))):
-                removed += 1
-            s_i = ratchet(s_i)
+        # Uses the checked opening value in order to find and remove the handle from the registry
+        s_i = rec.get("current_opening", rec["opening0"])
+        nn = handle(nullifier(s_i, rec["patient_id"]))
+        
+        if self.registry.remove(nn):
+            removed += 1
+            self._handle_to_opening.pop(nn, None)
+            
         return removed
-
 
 # --------------------------------------------------------------------------- #
 # Physician                                                                    #
