@@ -85,7 +85,7 @@ class Credential:
     sk: object                              # ABE secret key (backend object)
     attributes: FrozenSet[str]              # S (kept secret by the patient)
     presc: Prescription
-    opening0: bytes                         # S0, seeds the nullifier chain (F2)
+    opening0: Optional[bytes]               # S0, seeds the nullifier chain (F2)
     auth_sig: bytes                         # Authority signature over fingerprint (S6)
 
 
@@ -100,6 +100,7 @@ class PharmSession:
     R: bytes
     ap: Policy
     data: str
+    nullifier: bytes
 
 # --------------------------------------------------------------------------- #
 # Medical Authority (Issuer / TA)                                              #
@@ -128,7 +129,7 @@ class MedicalAuthority:
         self.physician_pubs[cert_id] = pub
 
     # Phase 2  (issuance / update)
-    def issue(self, req: SignedRequest, uses: Optional[int] = None) -> Credential:
+    def issue(self, req: SignedRequest) -> Credential:
         """Verify the physician's certificate and request, then run
         KeyGen on the prescription attributes and deliver the credential.
 
@@ -137,16 +138,27 @@ class MedicalAuthority:
                             Subsequent handles are published lazily after each spend.
         """
         pub = self.physician_pubs.get(req.cert_id)
+        uses = req.presc.uses
         if pub is None:
             raise PermissionError(f"unknown physician certificate {req.cert_id!r}")
         # Raises cryptography.exceptions.InvalidSignature on tampering.
         pub.verify(req.signature, _request_payload(req.patient_id, req.presc))
 
-        S = req.presc.key_attributes()
-        sk = self.pke.keygen(self.msk, self.mpk, S)
-        opening0 = rand_bytes(BLOCK)
+        opening0 = None if uses is None else rand_bytes(BLOCK) 
 
-        if uses is not None:
+        S = set(req.presc.key_attributes())
+        if uses is not None and uses > 0:
+            s_i = opening0
+            for i in range(1, uses + 1):
+                if s_i is None: break
+                n_i = nullifier(s_i, req.patient_id)
+                S.add(f"nullifier_{i} = {int.from_bytes(n_i, 'big')}")
+                s_i = ratchet(s_i)
+        S = frozenset(S)
+
+        sk = self.pke.keygen(self.msk, self.mpk, S)
+
+        if uses is not None and opening0 is not None:
             # Publish the first handle only
             s_i = opening0
             nn_0 = handle(nullifier(s_i, req.patient_id))
@@ -242,12 +254,12 @@ class Patient:
         self._opening: Optional[bytes] = None
         self._session: dict = {}
 
-    # Phase 0 receive: verify authenticity of the public parameters (S6).
+    # Phase 0 receive: verify authenticity of the public parameters
     def receive_params(self, pp: PublicParams) -> None:
         pp.authority_pub.verify(pp.signature, _mpk_fingerprint(pp.mpk))
         self.pp = pp
 
-    # Phase 2 receive: verify the credential's origin (S6), then store it (A4).
+    # Phase 2 receive: verify the credential's origin, then store it
     def store_credential(self, cred: Credential, authority_pub: Ed25519PublicKey) -> None:
         authority_pub.verify(cred.auth_sig,
                              _credential_fingerprint(cred.attributes, self.patient_id))
@@ -255,10 +267,10 @@ class Patient:
         self._opening = cred.opening0
         self._session = {}
 
-    # Phase 3 -- prover side of the ETSI handshake.
+    # Phase 3 -- prover side of the ETSI handshake
     def start_handshake(self, now: date = datetime.now().date()) -> Request | None:
         if self.cred is None: return None
-        req = RequestGen(self.cred.attributes, now)
+        req = RequestGen(self.cred.attributes, nullifier=self.current_nullifier(), now=now)
         self._session = {"req": req}
         return req
 
@@ -281,9 +293,9 @@ class Patient:
 
         return self.pke.decrypt(self.cred.sk, ch.ct)
 
-    # Redemption under !A5 -- reveal the current nullifier, then ratchet (F2/S7).
+    # Redemption under not A5 -- reveal the current nullifier, then ratchet
     def current_nullifier(self) -> bytes:
-        if self._opening is None: return b"\0"
+        if self._opening is None: return b"\1"
         return nullifier(self._opening, self.patient_id)
 
     def advance_use(self) -> None:
@@ -311,7 +323,7 @@ class Pharmacy:
         data = DataGen(req)                    # the medicine to hand over
         R = rand_bytes(BLOCK)                  # fresh nonce per session (S3, S5)
         ct = self.pke.encrypt(self.pp.mpk, ap, R)   # CCA-secure ABE encryption
-        return Challenge(ct=ct, ap=ap), PharmSession(R=R, ap=ap, data=data)
+        return Challenge(ct=ct, ap=ap), PharmSession(R=R, ap=ap, data=data, nullifier=req.nullifier)
 
     # Phase 4 -- verify the response and dispense (A5 path: no extra bookkeeping).
     def verify_and_dispense(self, session: PharmSession,
@@ -320,14 +332,13 @@ class Pharmacy:
             return None                        # unforgeable: no key -> no medicine
         return session.data
 
-    # Phase 4 under !A5 -- additionally check & consume the one-time nullifier.
+    # Phase 4 under not A5 -- additionally check & consume the one-time nullifier.
     def verify_and_dispense_once(self, session: PharmSession,
                                  response: Optional[bytes],
-                                 nullifier_value: bytes,
                                  authority: MedicalAuthority) -> Optional[str]:
         if response is None or response != session.R:
             return None
-        nn = handle(nullifier_value)
+        nn = handle(session.nullifier)
         if not authority.registry.contains(nn):
             return None                        # already redeemed / revoked (F2)
         authority.confirm_spend(nn)            # Authority removes the handle

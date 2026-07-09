@@ -1,5 +1,5 @@
 """
-Revocation, double-spending and forward security (report Section 3.3).
+Revocation, double-spending and forward security.
 
 Three revocation needs are covered by the design:
 
@@ -27,12 +27,6 @@ F2 / S7 -- the ratcheting nullifier.
     reveals ``N_i``; the Pharmacy checks ``F(N_i)`` is present, has the Authority
     remove it, and only then dispenses.  Revealing ``NN_i`` exposes nothing about
     earlier ``N_{<i}`` because ``F`` is one-way (forward security, S7).
-
-The report's *final* design replaces the public registry with a pairing-based
-cryptographic accumulator (ETSI clause 4.3.4) to keep it compact and shift
-revocation control to the Issuer; that pairing accumulator is out of scope for
-this proof of concept, so we model the registry as an explicit set and note the
-difference.
 """
 
 from __future__ import annotations

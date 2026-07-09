@@ -54,6 +54,7 @@ def digest(obj) -> str:
 # --------------------------------------------------------------------------- #
 def bootstrap(pke, drug="antiretroviral",
               not_before=date(2026, 1, 1), expires_at=date(2026, 12, 31)):
+    """Bootstrap with no nullifier"""
     authority = MedicalAuthority(pke)
     pp = authority.setup()
     ok("Phase 0: authority ran Setup(); mpk published and signed (S6)")
@@ -82,6 +83,8 @@ def bootstrap(pke, drug="antiretroviral",
 
 
 def run_handshake(pharmacy: Pharmacy, patient: Patient, now: date | None = None):
+    """Starts handshake with no nullifier control (Under A5)
+    """
     req = patient.start_handshake() if now is None else patient.start_handshake(now)
     if req is None:
         step("Aborted Handshake!!")
@@ -115,7 +118,7 @@ def scenario_wrong_drug(pke):
     _, _, pharmacy, patient = bootstrap(pke)
     now = date(2026, 6, 15)
     patient.start_handshake(now)                       # patient holds antiretroviral
-    bad_req = Request(drug_code="insulin", today=date_to_int(now), now=now)
+    bad_req = Request(drug_code="insulin", today=date_to_int(now), now=now, nullifier=b"\1")
     challenge, session = pharmacy.make_challenge(bad_req)
     assert challenge is not None and session is not None
     response = patient.answer_challenge(challenge)
@@ -218,27 +221,25 @@ def scenario_double_spend(pke):
     authority.register_physician(physician.cert_id, physician.pub)
     pharmacy = Pharmacy(pke, pharmacy_id=b"pharmacy:Via-Brombeis-17"); pharmacy.receive_params(pp)
     patient = Patient(pke, patient_id=b"patient:RVILGU44S07B354C"); patient.receive_params(pp)
-    presc = Prescription("RX-ONE-777", "salbutamol", date(2026, 1, 1), date(2026, 12, 31))
+    presc = Prescription("RX-ONE-777", "salbutamol", date(2026, 1, 1), date(2026, 12, 31), uses=1)
     patient.store_credential(
-        authority.issue(physician.authorize(patient.patient_id, presc), uses=1),
+        authority.issue(physician.authorize(patient.patient_id, presc)),
         authority.pub)
     step("issued a SINGLE-USE credential; one nullifier handle published")
     now = date(2026, 6, 15)
-    req = patient.start_handshake(now)
+    req = patient.start_handshake(now=now)
     assert req is not None
     ch, sess = pharmacy.make_challenge(req)
     assert ch is not None and sess is not None
-    med1 = pharmacy.verify_and_dispense_once(sess, patient.answer_challenge(ch),
-                                             patient.current_nullifier(), authority)
+    med1 = pharmacy.verify_and_dispense_once(sess, patient.answer_challenge(ch), authority)
     assert med1 is not None
     ok(f"first redemption succeeds: {med1}")
     patient.advance_use()
-    req2 = patient.start_handshake(now)
+    req2 = patient.start_handshake(now=now)
     assert req2 is not None
     ch2, sess2 = pharmacy.make_challenge(req2)
     assert ch2 is not None and sess2 is not None
-    med2 = pharmacy.verify_and_dispense_once(sess2, patient.answer_challenge(ch2),
-                                             patient.current_nullifier(), authority)
+    med2 = pharmacy.verify_and_dispense_once(sess2, patient.answer_challenge(ch2), authority)
     assert med2 is None
     ok("second redemption rejected: one-time nullifier already consumed (F2)")
     step("each use reveals a fresh nullifier via S_{i+1}=F(S_i); one-way ratchet (S7)")
@@ -251,17 +252,16 @@ def scenario_active_revocation(pke):
     authority.register_physician(physician.cert_id, physician.pub)
     pharmacy = Pharmacy(pke, pharmacy_id=b"pharmacy:napoli-03"); pharmacy.receive_params(pp)
     patient = Patient(pke, patient_id=b"patient:BFFGLG78A28B832F"); patient.receive_params(pp)
-    presc = Prescription("RX-BAD-001", "statin", date(2026, 1, 1), date(2026, 12, 31))
+    presc = Prescription("RX-BAD-001", "statin", date(2026, 1, 1), date(2026, 12, 31), uses=3)
     patient.store_credential(
-        authority.issue(physician.authorize(patient.patient_id, presc), uses=3),
+        authority.issue(physician.authorize(patient.patient_id, presc)),
         authority.pub)
     now = date(2026, 6, 15)
     req = patient.start_handshake(now)
     assert req is not None
     ch, sess = pharmacy.make_challenge(req)
     assert ch is not None and sess is not None
-    assert pharmacy.verify_and_dispense_once(sess, patient.answer_challenge(ch),
-                                             patient.current_nullifier(), authority) is not None
+    assert pharmacy.verify_and_dispense_once(sess, patient.answer_challenge(ch), authority) is not None
     ok("credential works before revocation")
     removed = authority.revoke("RX-BAD-001")
     step(f"authority recomputed the nullifier chain and removed {removed} handles")
@@ -270,8 +270,7 @@ def scenario_active_revocation(pke):
     assert req2 is not None
     ch2, sess2 = pharmacy.make_challenge(req2)
     assert ch2 is not None and sess2 is not None
-    assert pharmacy.verify_and_dispense_once(sess2, patient.answer_challenge(ch2),
-                                             patient.current_nullifier(), authority) is None
+    assert pharmacy.verify_and_dispense_once(sess2, patient.answer_challenge(ch2), authority) is None
     ok("after revocation the credential is refused (F3)")
 
 
