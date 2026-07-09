@@ -152,7 +152,7 @@ class MedicalAuthority:
             for i in range(1, uses + 1):
                 if s_i is None: break
                 n_i = nullifier(s_i, req.patient_id)
-                S.add(f"nullifier_{i} = {int.from_bytes(n_i, 'big')}")
+                S.add(f"nullifier_{i} = {int.from_bytes(n_i[:4], 'little')}")
                 s_i = ratchet(s_i)
         S = frozenset(S)
 

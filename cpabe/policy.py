@@ -38,7 +38,8 @@ def date_to_int(d: date) -> int:
 
 def nullifier_to_int(nullifier: bytes) -> int:
     """Encode nulllifier as int"""
-    return int.from_bytes(nullifier, 'big')
+    return int.from_bytes(nullifier[:4], 'big')
+
 
 def _san(name: str) -> str:
     """Sanitise a categorical attribute name to an OpenABE-safe token."""
@@ -168,7 +169,7 @@ def RequestGen(attributes: FrozenSet[str], nullifier: bytes = b"\1", now: date =
 
 
 # NOTE: This policyGen function is an example but it could be more complex asking for the number of milligrams of a given medicine or the age of the patient,for simplicity we considered only one drug, no dosage, a validity time for the prescription
-def PolicyGen(req: Request) -> Policy:
+def PolicyGen(req: Request, max_uses: int = 10) -> Policy:
     """``AP = PolicyGen(req)`` -- the dispensing rule::
 
         drug_<X>  and  not_before <= today  and  expires_at >= today
@@ -176,12 +177,24 @@ def PolicyGen(req: Request) -> Policy:
     i.e. the report's  drug:X AND (not_before <= now) AND (now <= expires_at),
     with the two time bounds expressed as OpenABE numerical comparisons.
     """
+
+    nullifier_nodes = [And(
+        (Num("nullifier", ">=", 1),
+         Num("nullifier", "<=", 1))
+    )]
+
+    nullifier_nodes.extend([And(
+        (Num(f"nullifier_{i}", ">=", nullifier_to_int(req.nullifier)),
+         Num(f"nullifier_{i}", "<=", nullifier_to_int(req.nullifier)))
+        ) for i in range(max_uses)])
+
+
     return And((
         Attr(f"drug_{req.drug_code}"),
         Num("not_before", "<=", req.today),
         Num("expires_at", ">=", req.today),
-        Num("nullifier", "<=", nullifier_to_int(req.nullifier)),
-        Num("nullifier", ">=", nullifier_to_int(req.nullifier)),
+        Or(tuple(nullifier_nodes))
+        
         #NOTE: Since it is not possible to express nullifier equality
         #      directly in OpenABE we express as double inequality
 
