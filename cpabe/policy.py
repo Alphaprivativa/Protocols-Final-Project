@@ -144,9 +144,10 @@ class Request:
     drug_code: str
     today: int                # current day, as days-since-2000
     now: date
-    nullifier: bytes = b"\1"  # empty nullifier b"\1" when no nullifier is expected
-                              # The natural choice would be b"\0" but OpenABE can't handle
-                              # 0 in comparisons
+    use: Optional[int] = None  # Use is a counter for the usage
+    nullifier: bytes = b"\1"    # empty nullifier b"\1" when no nullifier is expected
+                                # The natural choice would be b"\0" but OpenABE can't handle
+                                # 0 in comparisons
 
 
 def _drug_from_attributes(attributes: FrozenSet[str]) -> str:
@@ -161,15 +162,16 @@ def _drug_from_attributes(attributes: FrozenSet[str]) -> str:
     raise ValueError("credential carries no drug attribute")
 
 
-def RequestGen(attributes: FrozenSet[str], nullifier: bytes = b"\1", now: date = datetime.now().date()) -> Request:
+def RequestGen(attributes: FrozenSet[str], use : Optional[int] = None ,nullifier: bytes = b"\1", now: date = datetime.now().date()) -> Request:
     """Derive the presentation request from the credential attributes and the
     current date (the drug is what the patient asks for at the counter)."""
     return Request(drug_code=_drug_from_attributes(attributes),
-                   today=date_to_int(now), now=now, nullifier=nullifier)
+                   today=date_to_int(now), now=now, 
+                   use=use, nullifier=nullifier)
 
 
 # NOTE: This policyGen function is an example but it could be more complex asking for the number of milligrams of a given medicine or the age of the patient,for simplicity we considered only one drug, no dosage, a validity time for the prescription
-def PolicyGen(req: Request, max_uses: int = 10) -> Policy:
+def PolicyGen(req: Request) -> Policy:
     """``AP = PolicyGen(req)`` -- the dispensing rule::
 
         drug_<X>  and  not_before <= today  and  expires_at >= today
@@ -178,15 +180,16 @@ def PolicyGen(req: Request, max_uses: int = 10) -> Policy:
     with the two time bounds expressed as OpenABE numerical comparisons.
     """
 
-    nullifier_nodes = [And(
-        (Num("nullifier", ">=", 1),
-         Num("nullifier", "<=", 1))
-    )]
-
-    nullifier_nodes.extend([And(
-        (Num(f"nullifier_{i}", ">=", nullifier_to_int(req.nullifier)),
-         Num(f"nullifier_{i}", "<=", nullifier_to_int(req.nullifier)))
-        ) for i in range(max_uses)])
+    nullifier_nodes = (
+        And(
+            (Num("nullifier", ">=", 1),
+             Num("nullifier", "<=", 1)),
+        ),
+        And(
+            (Num(f"nullifier_{req.use}", ">=", nullifier_to_int(req.nullifier)),
+             Num(f"nullifier_{req.use}", "<=", nullifier_to_int(req.nullifier))),
+        ),
+    )
 
 
     return And((
@@ -194,10 +197,8 @@ def PolicyGen(req: Request, max_uses: int = 10) -> Policy:
         Num("not_before", "<=", req.today),
         Num("expires_at", ">=", req.today),
         Or(tuple(nullifier_nodes))
-        
         #NOTE: Since it is not possible to express nullifier equality
         #      directly in OpenABE we express as double inequality
-
     ))
 
 

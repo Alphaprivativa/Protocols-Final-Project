@@ -87,6 +87,15 @@ class Credential:
     presc: Prescription
     opening0: Optional[bytes]               # S0, seeds the nullifier chain (F2)
     auth_sig: bytes                         # Authority signature over fingerprint (S6)
+    use: Optional[int] = None               # use counter
+
+
+    def fetch_update_use(self) -> Optional[int]:
+        """Increment the use counter, if any."""
+        cur_use = self.use
+        if self.use is not None:
+            self.use += 1
+        return cur_use
 
 
 @dataclass
@@ -152,7 +161,7 @@ class MedicalAuthority:
             for i in range(1, uses + 1):
                 if s_i is None: break
                 n_i = nullifier(s_i, req.patient_id)
-                S.add(f"nullifier_{i} = {int.from_bytes(n_i[:4], 'little')}")
+                S.add(f"nullifier_{i} = {int.from_bytes(n_i[:4], 'big')}")
                 s_i = ratchet(s_i)
         S = frozenset(S)
 
@@ -176,7 +185,8 @@ class MedicalAuthority:
 
         auth_sig = self._sign.sign(_credential_fingerprint(S, req.patient_id))
         return Credential(sk=sk, attributes=S, presc=req.presc,
-                          opening0=opening0, auth_sig=auth_sig)
+                          opening0=opening0, auth_sig=auth_sig,
+                          use=0)
 
     # Phase 4 helper (only under !A5): confirm a spend by removing the handle
     # and publishing the next one in the chain.
@@ -270,7 +280,11 @@ class Patient:
     # Phase 3 -- prover side of the ETSI handshake
     def start_handshake(self, now: date = datetime.now().date()) -> Request | None:
         if self.cred is None: return None
-        req = RequestGen(self.cred.attributes, nullifier=self.current_nullifier(), now=now)
+        req = RequestGen(
+            self.cred.attributes, 
+            use=self.cred.fetch_update_use(), 
+            nullifier=self.current_nullifier(), 
+            now=now)
         self._session = {"req": req}
         return req
 
