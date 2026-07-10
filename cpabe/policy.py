@@ -185,7 +185,7 @@ def PolicyGen(req: Request) -> Policy:
             (Num("nullifier", ">=", 1),
              Num("nullifier", "<=", 1)),
         ),
-        
+        And(
             (Num(f"nullifier_{req.use}", ">=", nullifier_to_int(req.nullifier)),
              Num(f"nullifier_{req.use}", "<=", nullifier_to_int(req.nullifier))),
         ),
