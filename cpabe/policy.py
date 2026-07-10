@@ -180,23 +180,19 @@ def PolicyGen(req: Request) -> Policy:
     with the two time bounds expressed as OpenABE numerical comparisons.
     """
 
-    nullifier_nodes = (
-        And(
+    nullifier_node = And(
             (Num("nullifier", ">=", 1),
-             Num("nullifier", "<=", 1)),
-        ),
-        And(
-            (Num(f"nullifier_{req.use}", ">=", nullifier_to_int(req.nullifier)),
+             Num("nullifier", "<=", 1),
+             Num(f"nullifier_{req.use}", ">=", nullifier_to_int(req.nullifier)),
              Num(f"nullifier_{req.use}", "<=", nullifier_to_int(req.nullifier))),
-        ),
-    )
+        )
 
 
     return And((
         Attr(f"drug_{req.drug_code}"),
         Num("not_before", "<=", req.today),
         Num("expires_at", ">=", req.today),
-        Or(tuple(nullifier_nodes))
+        nullifier_node
         #NOTE: Since it is not possible to express nullifier equality
         #      directly in OpenABE we express as double inequality
     ))
