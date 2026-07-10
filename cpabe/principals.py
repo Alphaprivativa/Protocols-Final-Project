@@ -158,13 +158,13 @@ class MedicalAuthority:
         S = set(req.presc.key_attributes())
         if uses is not None and uses > 0:
             s_i = opening0
-            for i in range(1, uses + 1):
+            S.remove("nullifier = 1")
+            for i in range(uses):
                 if s_i is None: break
                 n_i = nullifier(s_i, req.patient_id)
                 S.add(f"nullifier_{i} = {int.from_bytes(n_i[:4], 'big')}")
                 s_i = ratchet(s_i)
         S = frozenset(S)
-
         sk = self.pke.keygen(self.msk, self.mpk, S)
 
         if uses is not None and opening0 is not None:
