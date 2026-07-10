@@ -158,7 +158,7 @@ class MedicalAuthority:
         S = set(req.presc.key_attributes())
         if uses is not None and uses > 0:
             s_i = opening0
-            S.remove("nullifier = 1")
+            S.remove("nullifier = 1")  # removes the trivial nullifier for infinite uses case
             for i in range(uses):
                 if s_i is None: break
                 n_i = nullifier(s_i, req.patient_id)
